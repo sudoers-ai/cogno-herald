@@ -1,0 +1,66 @@
+[project]
+name = "cogno-herald"
+version = "0.1.0"
+description = "Email/SMTP + iCalendar + OTP for the Cogno stack — stdlib-only delivery with an injectable OTP store (no Redis hard-dep) and host-owned credentials"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Sudoers AI" }]
+keywords = ["email", "smtp", "icalendar", "ics", "otp", "verification", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Email",
+    "Topic :: Software Development :: Libraries",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+# Pure stdlib at runtime: smtplib + email.mime + secrets. The host owns SMTP
+# credentials and (for multi-worker) a Redis-backed OTPStore adapter.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sudoers-ai/cogno-herald"
+Repository = "https://github.com/sudoers-ai/cogno-herald"
+Issues = "https://github.com/sudoers-ai/cogno-herald/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.8",
+]
+
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cogno_herald*"]
+
+[tool.setuptools.package-data]
+cogno_herald = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+files = ["cogno_herald"]
+warn_unused_ignores = true

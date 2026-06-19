@@ -46,6 +46,12 @@ async def test_wrong_code_fails_and_burns_after_max():
     assert await svc.has_pending("a@x.com") is False
 
 
+def test_inmemory_store_warns_at_construction(caplog):
+    with caplog.at_level(logging.WARNING, logger="cogno_herald.otp"):
+        OtpService(InMemoryOTPStore())
+    assert any("event=insecure_store" in r.message for r in caplog.records)
+
+
 async def test_no_sender_logs_warning(caplog):
     svc = OtpService(InMemoryOTPStore())
     with caplog.at_level(logging.WARNING, logger="cogno_herald.otp"):

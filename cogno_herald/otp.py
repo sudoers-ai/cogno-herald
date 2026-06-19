@@ -70,6 +70,18 @@ class OtpService:
         # Dev-only fixed code that always verifies; leave None in production.
         self.mock_code = mock_code
 
+        # SECURITY: the brute-force lockout (``max_verify`` + burn) only holds if
+        # the attempt counter is shared and atomic across workers. The in-memory
+        # store is process-local, so in a multi-worker deployment an attacker can
+        # spread guesses across processes and never trip the global limit. Warn so
+        # a misconfigured production deploy is at least loud. Plug a Redis-backed
+        # OTPStore (atomic INCR) instead — see docs/HOST_INTEGRATION.md.
+        if isinstance(self.store, InMemoryOTPStore):
+            logger.warning(
+                "stage=otp event=insecure_store store=InMemoryOTPStore "
+                "reason=process_local_counter_defeats_lockout_in_multiworker "
+                "fix=plug_redis_otpstore")
+
     @staticmethod
     def _code_key(email: str) -> str:
         return f"otp:{email}"

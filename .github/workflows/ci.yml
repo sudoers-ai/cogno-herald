@@ -27,3 +27,5 @@ jobs:
         run: mypy cogno_herald
       - name: Unit tests
         run: pytest tests/unit -q --cov=cogno_herald --cov-report=term-missing --cov-fail-under=90
+      - name: Integration tests (local SMTP via aiosmtpd)
+        run: pytest tests/integration -q

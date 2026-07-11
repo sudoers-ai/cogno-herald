@@ -37,6 +37,21 @@ ok = await otp.verify("user@example.com", code)
 See [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) for the Redis adapter and
 SMTP wiring, and [LOGGING.md](LOGGING.md) for the logging convention.
 
+## The Cogno ecosystem
+
+`cogno-herald` is one organ of **[Cogno](https://github.com/sudoers-ai)** — a family of
+small, composable, Apache-2.0 libraries that together form a complete
+conversational-agent platform. Each library owns a single concern and stays
+infra-agnostic; a **host** assembles them into a running agent:
+
+![The Cogno ecosystem](docs/assets/cogno-ecosystem.svg)
+
+The open-source libraries are the organs; the **host is the body** that joins
+them. Our reference host — `cogno-host`, with its `cogno-ui` dashboard — is the
+private product layer, but it holds no special powers: everything it does rides
+on the public seams documented in each library's `docs/HOST_INTEGRATION.md`, so
+you can assemble a body of your own.
+
 ## Develop
 
 ```bash

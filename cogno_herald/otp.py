@@ -90,8 +90,13 @@ class OtpService:
     def _attempts_key(email: str) -> str:
         return f"otp_attempts:{email}"
 
-    async def send(self, email: str, *, tenant_name: str = "Cogno") -> bool:
+    async def send(self, email: str, *, tenant_name: str = "Cogno",
+                   sender: Optional[EmailSender] = None) -> bool:
         """Generate, store, and (if a sender is configured) email a fresh code.
+
+        ``sender`` overrides the instance sender for THIS call — so a multi-tenant host can send
+        the code from the tenant's own SMTP (resolved per elevation) without rebuilding the service
+        (whose ``store`` must persist across send/verify). Falls back to the instance ``sender``.
 
         Returns ``True`` when the code was stored (delivery is best-effort).
         """
@@ -99,7 +104,8 @@ class OtpService:
         await self.store.set(self._code_key(email), code, self.ttl_seconds)
         await self.store.delete(self._attempts_key(email))
 
-        if self.sender is None:
+        use_sender = sender or self.sender
+        if use_sender is None:
             logger.warning(
                 "stage=otp event=no_sender email=%s reason=stored_only (code at DEBUG)", email)
             logger.debug("stage=otp event=code_debug email=%s code=%s", email, code)
@@ -112,7 +118,7 @@ class OtpService:
             f"This code expires in {ttl_min} minutes.\n"
             f"If you did not request it, ignore this message."
         )
-        sent = await self.sender(email, f"Verification Code — {tenant_name}", body)
+        sent = await use_sender(email, f"Verification Code — {tenant_name}", body)
         if sent:
             logger.info("stage=otp event=sent email=%s ttl_s=%d", email, self.ttl_seconds)
         else:

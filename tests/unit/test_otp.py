@@ -36,6 +36,27 @@ async def test_send_stores_and_verify_succeeds_once():
     assert await svc.verify("a@x.com", code) is False
 
 
+async def test_per_call_sender_override():
+    # A multi-tenant host passes the tenant's own sender per call; it wins over the instance one,
+    # and the code still verifies (store is unchanged).
+    used = []
+
+    async def instance_sender(to, subject, body):
+        used.append(("instance", to))
+        return True
+
+    async def tenant_sender(to, subject, body):
+        used.append(("tenant", to))
+        return True
+
+    svc = OtpService(InMemoryOTPStore(), sender=instance_sender)
+    assert await svc.send("emp@acme.com", sender=tenant_sender) is True
+    assert used == [("tenant", "emp@acme.com")]              # override won; instance sender untouched
+    # falls back to the instance sender when no override is given
+    assert await svc.send("other@x.com") is True
+    assert used[-1] == ("instance", "other@x.com")
+
+
 async def test_wrong_code_fails_and_burns_after_max():
     svc = OtpService(InMemoryOTPStore(), max_verify=3)
     await svc.send("a@x.com")  # no sender → stored only

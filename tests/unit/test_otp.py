@@ -57,6 +57,30 @@ async def test_per_call_sender_override():
     assert used[-1] == ("instance", "other@x.com")
 
 
+async def test_non_consuming_check_then_consume():
+    # check mode leaves the code alive so a later consuming verify (post-commit) still passes
+    svc = OtpService(InMemoryOTPStore())
+    await svc.send("a@x.com")
+    code = await svc.store.get("otp:a@x.com")
+    assert await svc.verify("a@x.com", code, consume=False) is True
+    assert await svc.has_pending("a@x.com") is True          # NOT burned
+    assert await svc.verify("a@x.com", code) is True         # default consumes
+    assert await svc.has_pending("a@x.com") is False
+    assert await svc.verify("a@x.com", code) is False        # single-use still holds
+
+
+async def test_non_consuming_check_wrong_code_still_counts_attempts():
+    # brute-force lockout is just as tight in check mode: wrong guesses burn after max_verify
+    svc = OtpService(InMemoryOTPStore(), max_verify=3)
+    await svc.send("a@x.com")
+    code = await svc.store.get("otp:a@x.com")
+    for _ in range(3):
+        assert await svc.verify("a@x.com", "000000", consume=False) is False
+    # over the limit → burned; even the right code is dead now
+    assert await svc.verify("a@x.com", code, consume=False) is False
+    assert await svc.has_pending("a@x.com") is False
+
+
 async def test_wrong_code_fails_and_burns_after_max():
     svc = OtpService(InMemoryOTPStore(), max_verify=3)
     await svc.send("a@x.com")  # no sender → stored only

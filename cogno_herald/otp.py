@@ -125,8 +125,15 @@ class OtpService:
             logger.warning("stage=otp event=send_failed email=%s", email)
         return True
 
-    async def verify(self, email: str, code: str) -> bool:
-        """Verify ``code``; track attempts and burn the OTP after ``max_verify``."""
+    async def verify(self, email: str, code: str, *, consume: bool = True) -> bool:
+        """Verify ``code``; track attempts and burn the OTP after ``max_verify``.
+
+        ``consume=False`` checks the code WITHOUT burning it on success — for a caller that
+        must gate durable work on the code and only spend it once that work has committed
+        (e.g. the host's atomic register flow: check → create tenant+user → consume). Failed
+        attempts still count toward ``max_verify`` either way, so the brute-force lockout is
+        just as tight in check mode.
+        """
         if self.mock_code is not None and code == self.mock_code:
             logger.warning("stage=otp event=mock_bypass email=%s", email)
             return True
@@ -140,6 +147,9 @@ class OtpService:
 
         stored = await self.store.get(self._code_key(email))
         if stored is not None and stored == code:
+            if not consume:
+                logger.info("stage=otp event=checked email=%s", email)
+                return True
             await self.store.delete(self._code_key(email))
             await self.store.delete(self._attempts_key(email))
             logger.info("stage=otp event=verified email=%s", email)

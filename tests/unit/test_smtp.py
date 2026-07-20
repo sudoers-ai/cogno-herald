@@ -1,6 +1,7 @@
 """SMTP send + config resolution — fake SMTP, no network."""
 
 import logging
+import ssl
 
 import pytest
 
@@ -13,13 +14,16 @@ CONFIG = {"host": "smtp.test", "port": 587, "user": "u", "password": "p",
 
 class FakeSMTP:
     sent: list = []
+    tls_context = None
 
     def __init__(self, host, port, timeout=30):
         self.host = host
         FakeSMTP.sent = []
+        FakeSMTP.tls_context = None
 
     def ehlo(self): ...
-    def starttls(self): ...
+    def starttls(self, context=None):
+        FakeSMTP.tls_context = context
     def login(self, user, password): ...
     def sendmail(self, from_email, recipients, payload):
         FakeSMTP.sent.append((from_email, recipients, payload))
@@ -37,6 +41,21 @@ async def test_send_plain_email_ok(caplog):
     assert result == {"sent": True, "recipients": ["a@x.com"]}
     assert any("event=sent" in r.message and r.levelno == logging.INFO
                for r in caplog.records)
+
+
+async def test_starttls_uses_a_verifying_context():
+    """STARTTLS must verify the server cert: bare ``starttls()`` is CERT_NONE on py≤3.12,
+    which would let an active MITM read the SMTP password and every OTP we mail."""
+    await send_plain_email(CONFIG, ["a@x.com"], "Hi", "body")
+    ctx = FakeSMTP.tls_context
+    assert ctx is not None, "starttls() called without an ssl context"
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True
+
+
+async def test_plain_connection_skips_tls_when_disabled():
+    await send_plain_email({**CONFIG, "use_tls": False}, ["a@x.com"], "Hi", "body")
+    assert FakeSMTP.tls_context is None
 
 
 async def test_send_filters_empty_recipients():

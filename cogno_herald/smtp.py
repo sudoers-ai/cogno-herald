@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import smtplib
+import ssl
 from email import encoders
 from email.header import Header
 from email.mime.base import MIMEBase
@@ -121,7 +122,11 @@ def _connect(smtp_config: SmtpConfig) -> smtplib.SMTP:
     server = smtplib.SMTP(host, port, timeout=30)
     server.ehlo()
     if smtp_config.get("use_tls", True):
-        server.starttls()
+        # An explicit context is required for CERTIFICATE VERIFICATION: bare ``starttls()``
+        # builds an ssl._create_stdlib_context() with check_hostname=False/CERT_NONE on
+        # Python ≤3.12, i.e. encryption an active MITM can transparently terminate — and this
+        # session carries the SMTP password plus every OTP we mail.
+        server.starttls(context=ssl.create_default_context())
         server.ehlo()
     user = smtp_config.get("user", "")
     password = smtp_config.get("password", "")

@@ -20,6 +20,8 @@ class SmtpConfig(TypedDict, total=False):
     from_email: str
     from_name: str
     use_tls: bool
+    tls_ca_file: str    # trust a private CA (internal relay) instead of the system store
+    tls_verify: bool    # default True; False = encrypt without verifying (last resort)
 
 
 class SendResult(TypedDict, total=False):

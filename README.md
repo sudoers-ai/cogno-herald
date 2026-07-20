@@ -34,6 +34,17 @@ await otp.send("user@example.com", tenant_name="Acme")
 ok = await otp.verify("user@example.com", code)
 ```
 
+`resolve_smtp_config` reads `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` /
+`SMTP_FROM_EMAIL` / `SMTP_FROM_NAME` / `SMTP_USE_TLS` (tenant config wins over the
+environment).
+
+**STARTTLS verifies the server certificate.** If your relay presents a certificate no public
+CA vouches for, point `SMTP_TLS_CA_FILE` at its CA rather than turning verification off — the
+session stays authenticated. `SMTP_TLS_VERIFY=false` is the last resort (encrypted but
+unauthenticated; it logs `event=tls_verification_disabled` every send). Do not reach for
+`SMTP_USE_TLS=false` for this: that drops encryption entirely, on a session carrying your SMTP
+password and every OTP.
+
 See [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) for the Redis adapter and
 SMTP wiring, and [LOGGING.md](LOGGING.md) for the logging convention.
 

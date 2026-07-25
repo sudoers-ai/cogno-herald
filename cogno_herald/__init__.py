@@ -12,6 +12,15 @@ rides in an injected ``EmailSender``. Adapted from the parent cogno's
 ``core/email.py`` + ``core/otp.py``.
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
+
+try:
+    __version__ = _dist_version("cogno-herald")
+except PackageNotFoundError:  # source tree without an installed dist (e.g. vendored checkout)
+    __version__ = "0.0.0"
+
+
 from cogno_herald.ical import build_ics_cancel, build_ics_event
 from cogno_herald.smtp import (
     resolve_smtp_config,

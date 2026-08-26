@@ -37,11 +37,20 @@ def build_ics_event(
     description: str = "",
     location: str = "",
     status: str = "CONFIRMED",
+    sequence: int = 0,
 ) -> str:
     """Build an iCalendar VEVENT string (``METHOD:REQUEST``).
 
     ``uid`` should be a stable per-event id (e.g. the appointment id) so a later
     CANCEL with the same UID removes the event from the recipient's calendar.
+
+    ``sequence`` is the RFC 5545 revision number. A message about a UID a client has
+    already seen is only honoured when its ``SEQUENCE`` is **higher** than the one it
+    holds; at an equal (or lower) value the update is silently discarded, so a corrected
+    time can be emailed, logged as sent, and never reach the calendar. This library only
+    renders the number — deciding it belongs to whoever owns the event's history. The
+    default keeps the previous hardcoded value, so callers that do not pass it are
+    unchanged.
     """
     dt_start = dtstart.strftime("%Y%m%dT%H%M%S")
     dt_end = dtend.strftime("%Y%m%dT%H%M%S")
@@ -59,7 +68,7 @@ def build_ics_event(
         f"DTEND:{dt_end}",
         f"SUMMARY:{_ical_escape(summary)}",
         f"STATUS:{status}",
-        "SEQUENCE:0",
+        f"SEQUENCE:{int(sequence)}",
     ]
 
     if organizer_name:
@@ -87,10 +96,17 @@ def build_ics_cancel(
     organizer_email: str,
     organizer_name: str = "",
     attendees: Optional[List[str]] = None,
+    sequence: int = 1,
 ) -> str:
     """Build an iCalendar VEVENT string (``METHOD:CANCEL``).
 
     ``uid`` must match the original event so the recipient's calendar removes it.
+
+    ``sequence`` follows the same rule as :func:`build_ics_event`, and a cancellation is
+    where getting it wrong is least visible: the hardcoded ``1`` this default preserves is
+    *lower* than any revision a caller may have sent in between, so such a cancel is
+    discarded and the appointment stays in the calendar for good. A caller that numbers its
+    updates must number its cancellations from the same sequence.
     """
     dt_start = dtstart.strftime("%Y%m%dT%H%M%S")
     dt_end = dtend.strftime("%Y%m%dT%H%M%S")
@@ -108,7 +124,7 @@ def build_ics_cancel(
         f"DTEND:{dt_end}",
         f"SUMMARY:CANCELLED: {_ical_escape(summary)}",
         "STATUS:CANCELLED",
-        "SEQUENCE:1",
+        f"SEQUENCE:{int(sequence)}",
     ]
 
     if organizer_name:

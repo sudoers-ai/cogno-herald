@@ -8,7 +8,13 @@ A self-contained communication utility, decoupled from any proprietary infra:
 - **SMTP** — send plain or iCalendar-attached email over stdlib `smtplib`
   (async via `asyncio.to_thread`); senders never raise, they return a result dict.
 - **iCalendar** — build RFC 5545 `.ics` invites (`REQUEST`) and cancellations
-  (`CANCEL`) that work with Google/Outlook/Apple Calendar.
+  (`CANCEL`) that work with Google/Outlook/Apple Calendar. **The zone travels in the
+  `datetime` you pass, not in a parameter:** a naive one renders the *floating* form
+  (§3.3.5 — "always interpreted in the context of the local time of the recipient", i.e.
+  a different instant per reader), an aware one in a named zone renders `;TZID=…` and
+  keeps the wall clock, and any other aware one renders the instant as UTC `Z`. Pass an
+  aware `datetime` whenever you know the zone — floating is not "no timezone", it is a
+  different one per guest.
 - **OTP** — a 6-digit one-time-password flow (generate/store/verify) with bounded
   attempts and single-use codes, generated with a CSPRNG (`secrets`).
 

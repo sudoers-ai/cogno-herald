@@ -5,8 +5,9 @@ the messenger of the ecosystem.
 
 A self-contained communication utility, decoupled from any proprietary infra:
 
-- **SMTP** — send plain or iCalendar-attached email over stdlib `smtplib`
-  (async via `asyncio.to_thread`); senders never raise, they return a result dict.
+- **SMTP** — send plain, HTML (`multipart/alternative`) or iCalendar-attached email over
+  stdlib `smtplib` (async via `asyncio.to_thread`); senders never raise, they return a result
+  dict.
 - **iCalendar** — build RFC 5545 `.ics` invites (`REQUEST`) and cancellations
   (`CANCEL`) that work with Google/Outlook/Apple Calendar. **The zone travels in the
   `datetime` you pass, not in a parameter:** a naive one renders the *floating* form

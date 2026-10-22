@@ -1,5 +1,6 @@
 """
-cogno_herald.smtp — SMTP sender (plain + iCalendar attachment) and config resolution.
+cogno_herald.smtp — SMTP sender (plain, HTML alternative, iCalendar attachment) and config
+resolution.
 
 Zero third-party deps — stdlib ``smtplib`` + ``email.mime``, made async via
 ``asyncio.to_thread`` since smtplib is blocking. Senders never raise: they return
@@ -90,6 +91,48 @@ async def send_plain_email(
         return SendResult(sent=False, error=str(exc))
 
 
+async def send_html_email(
+    smtp_config: SmtpConfig,
+    to_list: List[str],
+    subject: str,
+    body_text: str,
+    body_html: str,
+) -> SendResult:
+    """Send ``multipart/alternative``: the plain-text body FIRST, the HTML body SECOND. Never raises.
+
+    The order is the contract. RFC 2046 §5.1.4 makes the LAST part of an alternative the
+    preferred one, so a client that renders HTML shows the HTML and every other client shows the
+    text. The text part is the very part :func:`send_plain_email` puts on the wire for the same
+    ``body_text`` — same headers, same transfer encoding, same bytes.
+
+    The caller hands over BOTH bodies, and herald derives neither from the other. The text is
+    often what a person was shown and confirmed before the send, and a text rebuilt here from the
+    HTML would be a second rendering nobody saw. Nor does herald sanitise, escape or rewrite the
+    HTML: what the caller passes is what the recipient's client renders, so building it safely
+    (no script, no external resource, every value escaped) is the caller's job.
+
+    A blank ``body_html`` sends the plain message of :func:`send_plain_email` and logs
+    ``kind=plain``. An empty HTML alternative would be the part an HTML client SHOWS: an e-mail
+    with no body.
+
+    The failure line names the exception's CLASS, never its text: an SMTP exception's message can
+    quote the recipients (``SMTPRecipientsRefused`` is a dict of them), and no line of this
+    sender carries an address.
+    """
+    recipients = _clean_recipients(to_list)
+    if not recipients:
+        return SendResult(sent=False, error="no_valid_recipients")
+    html = body_html if isinstance(body_html, str) and body_html.strip() else None
+    try:
+        return await asyncio.to_thread(
+            _send_smtp, smtp_config, recipients, subject, body_text, None, "invite.ics", html
+        )
+    except Exception as exc:  # noqa: BLE001 — contract: senders never raise
+        logger.warning("stage=email event=send_failed kind=%s error=%s",
+                       "plain" if html is None else "html", type(exc).__name__)
+        return SendResult(sent=False, error=str(exc))
+
+
 async def send_email_with_ics(
     smtp_config: SmtpConfig,
     to_list: List[str],
@@ -167,13 +210,24 @@ def _send_smtp(
     body_text: str,
     ics_content: Optional[str],
     ics_filename: str,
+    body_html: Optional[str] = None,
 ) -> SendResult:
-    """Blocking SMTP send — runs inside ``asyncio.to_thread``."""
+    """Blocking SMTP send — runs inside ``asyncio.to_thread``.
+
+    ``body_html`` (only without ``ics_content``) makes the message ``multipart/alternative``:
+    the text part exactly as the plain message carries it, then the HTML part."""
     from_email, from_header = _from_header(smtp_config)
 
-    if ics_content is None:
-        msg: MIMEText | MIMEMultipart = MIMEText(body_text, "plain", "utf-8")
+    kind = "plain"
+    if ics_content is None and body_html is not None:
+        msg: MIMEText | MIMEMultipart = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
+        msg.attach(MIMEText(body_html, "html", "utf-8"))
+        kind = "html"
+    elif ics_content is None:
+        msg = MIMEText(body_text, "plain", "utf-8")
     else:
+        kind = "ics"
         msg = MIMEMultipart("mixed")
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
         method_val = "CANCEL" if "METHOD:CANCEL" in ics_content else "REQUEST"
@@ -193,6 +247,5 @@ def _send_smtp(
     finally:
         server.quit()
 
-    logger.info("stage=email event=sent recipients=%d kind=%s",
-                len(recipients), "plain" if ics_content is None else "ics")
+    logger.info("stage=email event=sent recipients=%d kind=%s", len(recipients), kind)
     return SendResult(sent=True, recipients=recipients)

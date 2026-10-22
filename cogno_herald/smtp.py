@@ -8,6 +8,11 @@ a ``SendResult`` dict so a host scheduler can decide what to do on failure.
 
 Ported from the parent cogno's ``core/email.py``. Logging follows the house
 convention: ``key=value`` lazy messages, no handlers configured here.
+
+No log line carries an address. ``event=sent`` logs the recipient COUNT, and every
+``event=send_failed`` logs the exception's CLASS, never its message: an SMTP exception's text can
+quote the recipients (``SMTPRecipientsRefused`` is a dict of them). The message still reaches the
+caller, in ``SendResult["error"]``.
 """
 
 from __future__ import annotations
@@ -79,7 +84,9 @@ async def send_plain_email(
     subject: str,
     body_text: str,
 ) -> SendResult:
-    """Send a plain-text email. Never raises — returns a ``SendResult``."""
+    """Send a plain-text email. Never raises — returns a ``SendResult``.
+
+    The failure line names the exception's CLASS, never its text (see the module docstring)."""
     recipients = _clean_recipients(to_list)
     if not recipients:
         return SendResult(sent=False, error="no_valid_recipients")
@@ -88,7 +95,7 @@ async def send_plain_email(
             _send_smtp, smtp_config, recipients, subject, body_text, None, "invite.ics"
         )
     except Exception as exc:  # noqa: BLE001 — contract: senders never raise
-        logger.warning("stage=email event=send_failed kind=plain error=%s", exc)
+        logger.warning("stage=email event=send_failed kind=plain error=%s", type(exc).__name__)
         return SendResult(sent=False, error=str(exc))
 
 
@@ -142,7 +149,9 @@ async def send_email_with_ics(
     ics_content: str,
     ics_filename: str = "invite.ics",
 ) -> SendResult:
-    """Send an email with an iCalendar (.ics) attachment. Never raises."""
+    """Send an email with an iCalendar (.ics) attachment. Never raises.
+
+    The failure line names the exception's CLASS, never its text (see the module docstring)."""
     recipients = _clean_recipients(to_list)
     if not recipients:
         return SendResult(sent=False, error="no_valid_recipients")
@@ -151,7 +160,7 @@ async def send_email_with_ics(
             _send_smtp, smtp_config, recipients, subject, body_text, ics_content, ics_filename
         )
     except Exception as exc:  # noqa: BLE001 — contract: senders never raise
-        logger.warning("stage=email event=send_failed kind=ics error=%s", exc)
+        logger.warning("stage=email event=send_failed kind=ics error=%s", type(exc).__name__)
         return SendResult(sent=False, error=str(exc))
 
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Docs swept against the code.** `LOGGING.md` names every event the library emits: three were
+  missing (`smtp` `tls_verification_disabled`, `otp` `insecure_store` and `checked`), and it now
+  says which OTP lines carry the address. The README indexes every `.md` (`CHANGELOG.md` was not
+  linked) and names the integration suite CI runs. This file gains the entries #11 and #12 shipped
+  without. No code changes.
 - **Every sender ends each line in CRLF on the wire** (RFC 5321 §2.3.8: an SMTP client MUST NOT
   send a bare LF).
   - Before, `as_bytes()` ended lines in a bare LF, and `smtplib` sends bytes as given. A server
@@ -38,6 +43,16 @@
   - `send_plain_email` and `send_email_with_ics` do not change.
   - `tests/unit/test_smtp_html.py` holds the unit half. A round trip through a local SMTP
     server is in `tests/integration/test_smtp_live.py`.
+- **The zone travels in the `datetime` you pass** (#12; backfilled — it shipped without an entry).
+  `build_ics_event` and `build_ics_cancel` render `DTSTART`/`DTEND` in the RFC 5545 form the
+  value justifies: a naive `datetime` → floating (the bytes rendered before), an aware one in a
+  named zone (`zoneinfo.ZoneInfo`) → `;TZID=<key>:` and the wall clock, any other aware one → UTC
+  `Z`. Before, every value was rendered floating and an aware `tzinfo` was discarded. No
+  `VTIMEZONE` is emitted.
+- **`sequence` parameter on both iCalendar builders** (#11; backfilled — it shipped without an
+  entry). `build_ics_event(..., sequence=0)` and `build_ics_cancel(..., sequence=1)` render the
+  RFC 5545 revision number the caller passes. The defaults are the values that used to be
+  hard-coded, so a caller that passes nothing is unchanged.
 
 ## 0.1.0 — 2026-07-25
 

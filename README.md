@@ -55,6 +55,13 @@ password and every OTP.
 See [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) for the Redis adapter and
 SMTP wiring, and [LOGGING.md](LOGGING.md) for the logging convention.
 
+## Documentation
+
+- [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) — SMTP config, the HTML alternative, what
+  the wire carries, and the OTP store/sender ports (with a Redis adapter).
+- [LOGGING.md](LOGGING.md) — the logging convention and every event the library emits.
+- [CHANGELOG.md](CHANGELOG.md) — what changed, per release.
+
 ## The Cogno ecosystem
 
 `cogno-herald` is one organ of **[Cogno](https://github.com/sudoers-ai)** — a family of
@@ -75,6 +82,7 @@ you can assemble a body of your own.
 ```bash
 pip install -e ".[dev]"
 pytest tests/unit -q
+pytest tests/integration -q    # against a local aiosmtpd server on loopback
 ruff check cogno_herald tests examples
 mypy cogno_herald
 ```

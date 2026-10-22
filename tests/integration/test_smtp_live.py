@@ -153,3 +153,77 @@ async def test_html_alternative_survives_transport(smtp_server):
     assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"]
     assert parts[0].get_payload(decode=True).decode("utf-8") == text
     assert parts[1].get_payload(decode=True).decode("utf-8") == html
+
+
+# ── Line ends on the wire (RFC 5321 §2.3.8) ──────────────────────────────────────────────────────
+# aiosmtpd reads DATA up to CRLF and refuses a line past 1001 octets, as a strict server does. Before
+# the fix herald sent bare LFs, so the WHOLE message was one line and anything over ~1000 bytes was
+# refused — a plain message of thirty short lines as surely as an HTML table on one long line. The
+# small messages above never showed it, and neither did a lenient capture server.
+
+_TEXT = "Olá, Professora.\n\n01/11 08:00 — Álgebra — 9A\n02/11 — Química — 9B\n"
+_LONG_HTML = ("<!DOCTYPE html><html><body><table>"
+              + "<tr><td>01/11</td><td>08:00</td><td>Álgebra — 9A</td></tr>" * 90
+              + "</table></body></html>")
+_SHORT_LINES = "".join(f"Linha {i:02d}: aula de Álgebra às 08:00 na sala 9A.\n" for i in range(30))
+_ICS = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:aula-1\r\n"
+        + "".join(f"COMMENT:item {i:02d} da pauta da reunião\r\n" for i in range(30))
+        + "END:VEVENT\r\nEND:VCALENDAR\r\n")
+
+
+def _sends():
+    from cogno_herald import smtp as _smtp
+
+    send_html_email = getattr(_smtp, "send_html_email")
+    return {
+        "plain_short": (lambda cfg: send_plain_email(cfg, ["dana@example.test"], "Aulas", _TEXT),
+                        {"text/plain": _TEXT}),
+        "plain_thirty_short_lines": (
+            lambda cfg: send_plain_email(cfg, ["dana@example.test"], "Aulas", _SHORT_LINES),
+            {"text/plain": _SHORT_LINES}),
+        "html_one_long_line": (
+            lambda cfg: send_html_email(cfg, ["dana@example.test"], "Aulas", _TEXT, _LONG_HTML),
+            {"text/plain": _TEXT, "text/html": _LONG_HTML}),
+        "ics": (lambda cfg: send_email_with_ics(cfg, ["dana@example.test"], "Aulas", _TEXT, _ICS),
+                {"text/plain": _TEXT, "text/calendar": _ICS}),
+    }
+
+
+@pytest.mark.parametrize("case", ["plain_short", "plain_thirty_short_lines", "html_one_long_line",
+                                  "ics"])
+async def test_a_strict_server_accepts_every_sender_and_every_part_decodes_intact(smtp_server, case):
+    handler, controller = smtp_server
+    send, expected = _sends()[case]
+    result = await send(_config(controller))
+    assert result["sent"] is True, result
+    assert len(handler.messages) == 1
+    msg = message_from_bytes(handler.messages[0])
+    decoded = {p.get_content_type(): p.get_payload(decode=True).decode("utf-8")
+               for p in msg.walk() if not p.is_multipart()}
+    assert decoded == expected
+
+
+@pytest.mark.parametrize("case", ["plain_short", "plain_thirty_short_lines", "html_one_long_line",
+                                  "ics"])
+async def test_the_transmitted_bytes_carry_no_bare_lf(smtp_server, case):
+    handler, controller = smtp_server
+    send, _ = _sends()[case]
+    assert (await send(_config(controller)))["sent"] is True
+    raw = handler.messages[0]
+    assert raw.count(b"\n") == raw.count(b"\r\n") > 0
+
+
+def test_control_the_server_refuses_a_bare_lf_message_over_1001_bytes(smtp_server):
+    """The negative control, produced rather than assumed: the same server, the same size, with
+    bare LFs sent straight through ``smtplib`` — refused. Without this, an accepting server would
+    read as a fixed sender."""
+    import smtplib
+
+    handler, controller = smtp_server
+    body = b"Subject: controle\n\n" + b"linha curta de controle\n" * 60
+    assert len(body) > 1001
+    with smtplib.SMTP(controller.hostname, controller.port, timeout=10) as client:
+        with pytest.raises(smtplib.SMTPDataError) as refused:
+            client.sendmail("bot@cogno.test", ["dana@example.test"], body)
+    assert refused.value.smtp_code == 500 and b"Line too long" in refused.value.smtp_error
+    assert handler.messages == []

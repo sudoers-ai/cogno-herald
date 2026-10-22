@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Every sender ends each line in CRLF on the wire** (RFC 5321 §2.3.8: an SMTP client MUST NOT
+  send a bare LF).
+  - Before, `as_bytes()` ended lines in a bare LF, and `smtplib` sends bytes as given. A server
+    that reads CRLF lines took the WHOLE message for one line and refused it past 998 octets.
+    Measured with `aiosmtpd`: `500 Line too long` for every message over about a kilobyte — a
+    plain message of thirty short lines, an HTML table on one long line, a 1 KB `.ics`.
+  - The defect predates `send_html_email` (#14): `send_plain_email` and `send_email_with_ics`
+    had it from the first release. It stayed hidden because every test message was under 1001
+    bytes, and a lenient capture server (MailHog) accepts bare LFs.
+  - Exposure: a strict server refuses the message whole. `aiosmtpd` does by default, and so does
+    Postfix with `smtpd_forbid_bare_newline` set to reject.
+  - The transport encoding of every part does not change: base64, so no line of a part passes 76
+    columns and no quoted-printable was added. The headers and the encoded bytes do not change
+    either. Only the line ends of the wire bytes do, LF → CRLF.
+  - The CONTENT of every part, decoded, is byte for byte what the caller passed: the text, the
+    HTML and the `.ics`. A caller that audits a send compares the decoded content. The wire
+    bytes are transport, and their encoding may change.
+  - `tests/unit/test_smtp_wire.py` pins it: no bare LF and no line over 998 in what reaches
+    `sendmail`, and the digests of the wire (line ends folded back, boundary named) taken before
+    the fix. `tests/integration/test_smtp_live.py` sends the four shapes through a strict
+    `aiosmtpd`, with a control that the same server refuses a bare-LF message.
+  - Not covered: a header made of one unbroken ASCII token over ~990 characters (a subject or a
+    sender name with no space) still folds into one line past 998 octets. No caller sends one.
 - **`send_html_email(smtp, to, subject, text, html)`** sends `multipart/alternative`, the
   text part first and the HTML part second. An HTML client shows the HTML and every other
   client shows the text.

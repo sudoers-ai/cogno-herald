@@ -25,6 +25,11 @@ Senders **never raise** — they return `SendResult` (`{"sent": bool, ...}`). A
 transport failure is a `WARNING` + `{"sent": False, "error": ...}`, so your
 scheduler decides whether to retry.
 
+On the wire every line ends in CRLF (RFC 5321 §2.3.8), and every body part is
+base64, so no line passes 76 columns. What you can rely on is the CONTENT: each
+part, decoded, is byte for byte what you passed. The wire bytes are transport,
+so compare the decoded content when you audit a send.
+
 ### HTML with a text alternative
 
 `send_html_email(smtp, to, subject, text, html)` sends `multipart/alternative`:

@@ -19,6 +19,7 @@ import smtplib
 import ssl
 from email import encoders
 from email.header import Header
+from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -203,6 +204,20 @@ def _connect(smtp_config: SmtpConfig) -> smtplib.SMTP:
     return server
 
 
+def _wire_bytes(msg: Message) -> bytes:
+    """The message as SMTP carries it: every line ended by CRLF.
+
+    RFC 5321 §2.3.8: a client MUST NOT send a bare LF. ``as_bytes()`` under the message's own
+    policy (compat32) ends lines in ``\\n``, and ``smtplib.SMTP.sendmail`` sends ``bytes`` exactly
+    as given — it fixes line ends only for a ``str``. A server that reads CRLF lines then takes the
+    whole message for ONE line and refuses it past 998 octets (aiosmtpd: ``500 Line too long``), so
+    every message over about a kilobyte failed while a small one went through.
+
+    Only the line separator changes: the same policy otherwise, so the same headers, the same
+    transfer encoding of every part (base64) and the same encoded bytes."""
+    return msg.as_bytes(policy=msg.policy.clone(linesep="\r\n"))
+
+
 def _send_smtp(
     smtp_config: SmtpConfig,
     recipients: List[str],
@@ -215,7 +230,8 @@ def _send_smtp(
     """Blocking SMTP send — runs inside ``asyncio.to_thread``.
 
     ``body_html`` (only without ``ics_content``) makes the message ``multipart/alternative``:
-    the text part exactly as the plain message carries it, then the HTML part."""
+    the text part exactly as the plain message carries it, then the HTML part. All three kinds
+    go out through :func:`_wire_bytes`."""
     from_email, from_header = _from_header(smtp_config)
 
     kind = "plain"
@@ -243,7 +259,7 @@ def _send_smtp(
 
     server = _connect(smtp_config)
     try:
-        server.sendmail(from_email, recipients, msg.as_bytes())
+        server.sendmail(from_email, recipients, _wire_bytes(msg))
     finally:
         server.quit()
 

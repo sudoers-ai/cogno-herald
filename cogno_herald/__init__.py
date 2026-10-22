@@ -1,8 +1,8 @@
 """
 cogno-herald — email/SMTP + iCalendar + OTP for the Cogno stack.
 
-A self-contained communication utility: send plain or iCalendar-attached email
-over SMTP (stdlib only), build RFC 5545 .ics invites/cancellations, and run a
+A self-contained communication utility: send plain, HTML-alternative or
+iCalendar-attached email over SMTP (stdlib only), build RFC 5545 .ics invites/cancellations, and run a
 6-digit OTP flow (generate/store/verify with bounded attempts).
 
 Infra-agnostic: zero third-party runtime dependencies. The host owns the SMTP
@@ -25,6 +25,7 @@ from cogno_herald.ical import build_ics_cancel, build_ics_event
 from cogno_herald.smtp import (
     resolve_smtp_config,
     send_email_with_ics,
+    send_html_email,
     send_plain_email,
 )
 from cogno_herald.otp import (
@@ -44,6 +45,7 @@ __all__ = [
     # smtp
     "resolve_smtp_config",
     "send_plain_email",
+    "send_html_email",
     "send_email_with_ics",
     # otp
     "OtpService",

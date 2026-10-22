@@ -20,7 +20,11 @@ This library follows the Cogno house rule: **libraries emit, the host configures
   `cogno_herald.otp` in a multi-tenant production environment.
 
 ## What gets logged
-- `cogno_herald.smtp` — INFO `event=sent`; WARNING `event=send_failed`.
+- `cogno_herald.smtp` — INFO `event=sent`; WARNING `event=send_failed`. Both carry
+  `kind=plain|html|ics`. `event=sent` logs the recipient COUNT, never an address.
+  `event=send_failed` from `send_html_email` logs the exception's class name, not its message,
+  because an SMTP exception's message can quote the recipients (`SMTPRecipientsRefused` is a
+  dict of them). `send_plain_email` and `send_email_with_ics` still log the message, as before.
 - `cogno_herald.otp` — INFO `event=sent|verified`; WARNING
   `event=no_sender|send_failed|burned|mock_bypass`; INFO `event=verify_failed`;
   DEBUG `event=code_debug` (the code — dev only).

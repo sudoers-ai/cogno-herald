@@ -25,6 +25,27 @@ Senders **never raise** — they return `SendResult` (`{"sent": bool, ...}`). A
 transport failure is a `WARNING` + `{"sent": False, "error": ...}`, so your
 scheduler decides whether to retry.
 
+### HTML with a text alternative
+
+`send_html_email(smtp, to, subject, text, html)` sends `multipart/alternative`:
+the text part FIRST, the HTML part SECOND. RFC 2046 makes the last part the
+preferred one, so an HTML client shows the HTML and every other client shows the
+text. The text part is byte for byte the part `send_plain_email` sends for the
+same text.
+
+```python
+from cogno_herald import send_html_email
+
+await send_html_email(smtp, [client], "Your classes", text_body, html_body)
+```
+
+- **You hand over both bodies.** Herald derives neither from the other. When the
+  text is what a person was shown and confirmed, the text you pass is that text.
+- **Herald does not sanitise the HTML.** It sends what you pass. Build it safely
+  on your side: no script, no external resource, and every value escaped.
+- **A blank `html` sends the plain message** (`kind=plain` in the log), because
+  an empty HTML part is what an HTML client would show.
+
 ## 2. OTP — bring your own store (and sender)
 
 The parent hard-wired Redis. Here OTP state rides in an injected `OTPStore`

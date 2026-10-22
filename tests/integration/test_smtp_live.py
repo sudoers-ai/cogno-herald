@@ -132,3 +132,24 @@ async def test_multiple_recipients_all_delivered(smtp_server):
     assert handler.rcpt_tos == ["x@example.test", "y@example.test"]
     msg = message_from_bytes(handler.messages[0])
     assert msg["To"] == "x@example.test, y@example.test"
+
+
+async def test_html_alternative_survives_transport(smtp_server):
+    """``send_html_email`` over a real socket: the server receives ONE ``multipart/alternative``
+    whose two parts — text first, HTML second — decode back to exactly what was handed over."""
+    from cogno_herald import smtp as _smtp
+
+    handler, controller = smtp_server
+    text = "Olá.\n01/11 08:00 — Álgebra — 9A\n"
+    html = "<!DOCTYPE html><html><body><table><tr><td>Álgebra</td></tr></table></body></html>"
+    result = await getattr(_smtp, "send_html_email")(
+        _config(controller), ["dana@example.test"], "Aulas", text, html)
+    assert result["sent"] is True
+    assert handler.rcpt_tos == ["dana@example.test"]
+
+    msg = message_from_bytes(handler.messages[0])
+    assert msg.get_content_type() == "multipart/alternative"
+    parts = msg.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/plain", "text/html"]
+    assert parts[0].get_payload(decode=True).decode("utf-8") == text
+    assert parts[1].get_payload(decode=True).decode("utf-8") == html

@@ -85,3 +85,8 @@ With **no sender**, `send()` stores the code and logs it at DEBUG only
 See [LOGGING.md](../LOGGING.md). Libraries emit `key=value`; the host attaches the
 handler and sets `logging.getLogger("cogno_herald").setLevel(...)`. Keep
 `cogno_herald.otp` above DEBUG in production (the code prints at DEBUG).
+
+No line names an address or quotes an exception's text, so a line does not say WHOSE code was
+sent or which recipient was refused. Correlate in your own log context (you know whom you called
+`send`/`verify` for), and treat `SendResult["error"]` as text that can quote the recipients
+before you log it.

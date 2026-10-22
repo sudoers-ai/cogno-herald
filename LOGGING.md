@@ -20,19 +20,34 @@ This library follows the Cogno house rule: **libraries emit, the host configures
   no sender is configured (`event=code_debug`). Never enable DEBUG for
   `cogno_herald.otp` in a multi-tenant production environment.
 
+## No line carries an address
+
+A line says which event happened and how much: an event name, a `kind`, a count, an
+exception's class. It never carries an e-mail address, and never the text of an exception,
+because an SMTP exception's message can quote the recipients (`SMTPRecipientsRefused` is a dict
+of them). The domain of an address is not logged either, and neither is a digest of it: a
+digest of an address is still pseudonymous personal data.
+
+The caller knows whom it sent to or verified for, and correlates in its own log context. The
+exception's message still reaches it, in `SendResult["error"]`. What the caller logs from there is
+the caller's.
+
+`tests/unit/test_no_address_in_logs.py` holds it. It drives every log call of the package with a
+sentinel address, at DEBUG, and the sentinel must appear in no record: not in the rendered
+message, not in the arguments, not in an exception. The calls are read from the source, so a new
+line fails until a sentinel case drives it.
+
 ## What gets logged
 - `cogno_herald.smtp` — INFO `event=sent`; WARNING `event=send_failed`. Both carry
-  `kind=plain|html|ics`. `event=sent` logs the recipient COUNT, never an address.
-  `event=send_failed` from `send_html_email` logs the exception's class name, not its message,
-  because an SMTP exception's message can quote the recipients (`SMTPRecipientsRefused` is a
-  dict of them). `send_plain_email` and `send_email_with_ics` still log the message, as before.
-  WARNING `event=tls_verification_disabled` (with the SMTP `host`) on every STARTTLS send with
-  `tls_verify` false and no `tls_ca_file`.
+  `kind=plain|html|ics`. `event=sent` logs the recipient COUNT. `event=send_failed` logs the
+  exception's class name (`error=SMTPRecipientsRefused`), from all three senders.
+  WARNING `event=tls_verification_disabled` (with the SMTP `host`, the operator's own
+  configuration) on every STARTTLS send with `tls_verify` false and no `tls_ca_file`.
 - `cogno_herald.otp` — INFO `event=sent|checked|verified|verify_failed` (`checked` is a
   correct code under `verify(consume=False)`); WARNING
   `event=no_sender|send_failed|burned|mock_bypass`; WARNING `event=insecure_store` once per
   `OtpService` built over `InMemoryOTPStore`; DEBUG `event=code_debug` (the code — dev only).
-  Every line about a code carries the address it is for (`email=`); `insecure_store` carries
-  none.
+  The fields are counts: `ttl_s` on `sent`, `attempts` on `burned`, `attempt=n/max` on
+  `verify_failed`. Which OTP lines carry the address: none.
 
 Secrets (SMTP password, OTP code above DEBUG) are never logged.

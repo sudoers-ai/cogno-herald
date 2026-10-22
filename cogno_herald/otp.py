@@ -11,6 +11,11 @@ seams keep it infra-agnostic:
 
 Codes are generated with ``secrets`` (CSPRNG), an upgrade over the parent's
 ``random``. The code value is **never** logged above DEBUG.
+
+No log line carries the address a code is for: an e-mail address is personal data, and a line
+says which event happened and how many (attempts, the TTL), never whose. The caller knows whom
+it called :meth:`OtpService.send` or :meth:`OtpService.verify` for, and correlates in its own
+log context.
 """
 
 from __future__ import annotations
@@ -106,9 +111,8 @@ class OtpService:
 
         use_sender = sender or self.sender
         if use_sender is None:
-            logger.warning(
-                "stage=otp event=no_sender email=%s reason=stored_only (code at DEBUG)", email)
-            logger.debug("stage=otp event=code_debug email=%s code=%s", email, code)
+            logger.warning("stage=otp event=no_sender reason=stored_only (code at DEBUG)")
+            logger.debug("stage=otp event=code_debug code=%s", code)
             return True
 
         ttl_min = self.ttl_seconds // 60
@@ -120,9 +124,9 @@ class OtpService:
         )
         sent = await use_sender(email, f"Verification Code — {tenant_name}", body)
         if sent:
-            logger.info("stage=otp event=sent email=%s ttl_s=%d", email, self.ttl_seconds)
+            logger.info("stage=otp event=sent ttl_s=%d", self.ttl_seconds)
         else:
-            logger.warning("stage=otp event=send_failed email=%s", email)
+            logger.warning("stage=otp event=send_failed")
         return True
 
     async def verify(self, email: str, code: str, *, consume: bool = True) -> bool:
@@ -135,28 +139,27 @@ class OtpService:
         just as tight in check mode.
         """
         if self.mock_code is not None and code == self.mock_code:
-            logger.warning("stage=otp event=mock_bypass email=%s", email)
+            logger.warning("stage=otp event=mock_bypass")
             return True
 
         attempts = await self.store.incr(self._attempts_key(email), self.ttl_seconds)
         if attempts > self.max_verify:
             await self.store.delete(self._code_key(email))
             await self.store.delete(self._attempts_key(email))
-            logger.warning("stage=otp event=burned email=%s attempts=%d", email, attempts)
+            logger.warning("stage=otp event=burned attempts=%d", attempts)
             return False
 
         stored = await self.store.get(self._code_key(email))
         if stored is not None and stored == code:
             if not consume:
-                logger.info("stage=otp event=checked email=%s", email)
+                logger.info("stage=otp event=checked")
                 return True
             await self.store.delete(self._code_key(email))
             await self.store.delete(self._attempts_key(email))
-            logger.info("stage=otp event=verified email=%s", email)
+            logger.info("stage=otp event=verified")
             return True
 
-        logger.info("stage=otp event=verify_failed email=%s attempt=%d/%d",
-                    email, attempts, self.max_verify)
+        logger.info("stage=otp event=verify_failed attempt=%d/%d", attempts, self.max_verify)
         return False
 
     async def has_pending(self, email: str) -> bool:

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **No log line carries an e-mail address, nor the text of an exception.**
+  - Before, every OTP line about a code logged the address it was for (`email=`): `sent`,
+    `send_failed`, `no_sender`, `code_debug`, `mock_bypass`, `burned`, `checked`, `verified`,
+    `verify_failed`. They now log the event and its counts only (`ttl_s`, `attempts`,
+    `attempt=n/max`).
+  - `send_plain_email` and `send_email_with_ics` logged the exception's MESSAGE on failure, and
+    an SMTP exception's message can quote the recipients (`SMTPRecipientsRefused` is a dict of
+    them). They now log its class name, as `send_html_email` already did.
+  - Not logged instead: the domain of the address, or a digest of it. A digest of an address is
+    still pseudonymous personal data. The caller knows whom it sent to, and correlates in its
+    own log context.
+  - Unchanged: the event names and levels, the recipient count on `event=sent`, the SMTP `host`
+    on `event=tls_verification_disabled`, the code on `event=code_debug` (DEBUG, no sender
+    only), and `SendResult["error"]`, which still carries the exception's message to the caller.
+  - `tests/unit/test_no_address_in_logs.py` drives every log call of the package with a sentinel
+    address at DEBUG; the sentinel must appear in no record. On the previous tree 13 of its 22
+    tests fail: the nine OTP lines, and the plain and `.ics` failures twice each (the address,
+    and the class name the line now carries). The log calls are read from the source, so a new
+    line fails until a sentinel case drives it.
 - **Docs swept against the code.** `LOGGING.md` names every event the library emits: three were
   missing (`smtp` `tls_verification_disabled`, `otp` `insecure_store` and `checked`), and it now
   says which OTP lines carry the address. The README indexes every `.md` (`CHANGELOG.md` was not

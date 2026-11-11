@@ -21,6 +21,12 @@ if smtp:
     await send_email_with_ics(smtp, [client], "Your appointment", body, ics)
 ```
 
+The `.ics` builders escape TEXT values and fold lines per RFC 5545, and they
+**reject** a raw CR/LF in `uid` or in any e-mail address (`ValueError`) — those
+come from outside and a newline there is a property-injection attempt, not
+content. A malformed appointment id or address fails loudly instead of forging a
+calendar entry; well-formed invites are unaffected.
+
 Senders **never raise** — they return `SendResult` (`{"sent": bool, ...}`). A
 transport failure is a `WARNING` + `{"sent": False, "error": ...}`, so your
 scheduler decides whether to retry.

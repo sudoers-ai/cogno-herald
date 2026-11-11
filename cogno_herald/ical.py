@@ -45,13 +45,63 @@ from typing import List, Optional
 
 
 def _ical_escape(text: str) -> str:
-    """Escape special characters for iCalendar property values."""
+    """Escape special characters for an iCalendar TEXT property value (RFC 5545 §3.3.11).
+
+    A backslash, ``;`` and ``,`` are escaped, and every newline form (``\\r\\n``, a lone
+    ``\\r`` or ``\\n``) collapses to the literal ``\\n`` the standard uses — so a newline in
+    free text (a multi-line DESCRIPTION) is PRESERVED as content and can never end the line
+    early and inject a property. A raw CR is neutralised the same way, since none may survive
+    into the wire. Identifier/address fields that are not TEXT (``UID``, a ``mailto:``) go
+    through :func:`_reject_crlf` instead — there is nothing to escape a newline *to* there."""
     return (
         text.replace("\\", "\\\\")
+        .replace("\r\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\n", "\\n")
         .replace(";", "\\;")
         .replace(",", "\\,")
-        .replace("\n", "\\n")
     )
+
+
+def _reject_crlf(value: str, field: str) -> str:
+    """Refuse a raw CR or LF in an identifier/address field (``UID``, an e-mail address).
+
+    These are placed into the content line WITHOUT TEXT escaping — a UID and a ``mailto:``
+    URI are not free text — so a newline in them is never content: it is an attempt to end
+    the line and inject a property (``UID:x\\r\\nSUMMARY:evil`` or a forged ``ATTENDEE``).
+    There is nothing to legitimately escape it to, so it is refused loudly rather than
+    smuggled through. Returns the value unchanged when it is clean, to read inline."""
+    if "\r" in value or "\n" in value:
+        raise ValueError(
+            f"{field} must not contain a CR or LF character (possible iCalendar injection)")
+    return value
+
+
+def _fold(line: str) -> str:
+    """Fold one content line to at most 75 octets (RFC 5545 §3.1).
+
+    A line longer than 75 octets is split and each continuation begins with a single space;
+    an unfolding parser rejoins them by dropping the CRLF and that leading space. The split
+    is made on a CHARACTER boundary so a multi-byte UTF-8 codepoint is never cut in half, and
+    each physical line — the leading space included — stays within the 75-octet limit."""
+    if len(line.encode("utf-8")) <= 75:
+        return line
+    pieces: List[bytes] = []
+    cur = b""
+    for ch in line:
+        enc = ch.encode("utf-8")
+        if len(cur) + len(enc) > 75:
+            pieces.append(cur)
+            cur = b" " + enc    # a continuation line opens with one space
+        else:
+            cur += enc
+    pieces.append(cur)
+    return "\r\n".join(p.decode("utf-8") for p in pieces)
+
+
+def _render(lines: List[str]) -> str:
+    """Join the content lines, folding each to the 75-octet limit, with the trailing CRLF."""
+    return "\r\n".join(_fold(ln) for ln in lines) + "\r\n"
 
 
 def _utc_stamp() -> str:
@@ -132,7 +182,7 @@ def build_ics_event(
         "CALSCALE:GREGORIAN",
         "METHOD:REQUEST",
         "BEGIN:VEVENT",
-        f"UID:{uid}",
+        f"UID:{_ical_escape(_reject_crlf(uid, 'uid'))}",
         f"DTSTAMP:{_utc_stamp()}",
         _dt_property("DTSTART", dtstart),
         _dt_property("DTEND", dtend),
@@ -142,12 +192,14 @@ def build_ics_event(
     ]
 
     if organizer_name:
-        lines.append(f"ORGANIZER;CN={_ical_escape(organizer_name)}:mailto:{organizer_email}")
+        lines.append(f"ORGANIZER;CN={_ical_escape(organizer_name)}:"
+                     f"mailto:{_reject_crlf(organizer_email, 'organizer_email')}")
     else:
-        lines.append(f"ORGANIZER:mailto:{organizer_email}")
+        lines.append(f"ORGANIZER:mailto:{_reject_crlf(organizer_email, 'organizer_email')}")
 
     for email in attendees or []:
-        lines.append(f"ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:{email}")
+        lines.append("ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:"
+                     f"mailto:{_reject_crlf(email, 'attendee')}")
 
     if description:
         lines.append(f"DESCRIPTION:{_ical_escape(description)}")
@@ -155,7 +207,7 @@ def build_ics_event(
         lines.append(f"LOCATION:{_ical_escape(location)}")
 
     lines.extend(["END:VEVENT", "END:VCALENDAR"])
-    return "\r\n".join(lines) + "\r\n"
+    return _render(lines)
 
 
 def build_ics_cancel(
@@ -190,7 +242,7 @@ def build_ics_cancel(
         "CALSCALE:GREGORIAN",
         "METHOD:CANCEL",
         "BEGIN:VEVENT",
-        f"UID:{uid}",
+        f"UID:{_ical_escape(_reject_crlf(uid, 'uid'))}",
         f"DTSTAMP:{_utc_stamp()}",
         _dt_property("DTSTART", dtstart),
         _dt_property("DTEND", dtend),
@@ -200,12 +252,13 @@ def build_ics_cancel(
     ]
 
     if organizer_name:
-        lines.append(f"ORGANIZER;CN={_ical_escape(organizer_name)}:mailto:{organizer_email}")
+        lines.append(f"ORGANIZER;CN={_ical_escape(organizer_name)}:"
+                     f"mailto:{_reject_crlf(organizer_email, 'organizer_email')}")
     else:
-        lines.append(f"ORGANIZER:mailto:{organizer_email}")
+        lines.append(f"ORGANIZER:mailto:{_reject_crlf(organizer_email, 'organizer_email')}")
 
     for email in attendees or []:
-        lines.append(f"ATTENDEE:mailto:{email}")
+        lines.append(f"ATTENDEE:mailto:{_reject_crlf(email, 'attendee')}")
 
     lines.extend(["END:VEVENT", "END:VCALENDAR"])
-    return "\r\n".join(lines) + "\r\n"
+    return _render(lines)

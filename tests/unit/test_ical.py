@@ -194,3 +194,79 @@ def test_a_zone_name_that_could_inject_a_parameter_falls_back_to_UTC():
                           datetime(2026, 6, 23, 10, 0, tzinfo=_Sneaky()), "o@x.com")
     assert _dtstart_line(ics) == "DTSTART:20260623T090000Z"
     assert "RSVP=FALSE" not in ics
+
+
+# ── injection & folding: RFC 5545 §3.1 (folding) and §3.3.11 (TEXT escaping) ─────────
+#
+# UID and the e-mail addresses reach these builders from outside (an appointment id, a
+# guest's address). A ';' must not open a parameter and a CR/LF must not end the line and
+# forge a new property; a line over 75 octets must be folded, not emitted raw.
+
+import pytest
+
+
+def _physical_lines(ics: str) -> list[str]:
+    return ics.split("\r\n")
+
+
+def test_uid_with_semicolon_is_escaped_not_injected():
+    ics = build_ics_event("appt;X-PWNED:yes", "S", datetime(2026, 1, 1),
+                          datetime(2026, 1, 1), "o@x.com")
+    # the ';' is escaped INTO the UID value, so no standalone X-PWNED property is forged
+    assert r"UID:appt\;X-PWNED:yes" in ics
+    assert not any(ln.startswith("X-PWNED") for ln in _physical_lines(ics))
+
+
+def test_uid_with_crlf_is_refused():
+    with pytest.raises(ValueError):
+        build_ics_event("appt\r\nX-PWNED:yes", "S", datetime(2026, 1, 1),
+                        datetime(2026, 1, 1), "o@x.com")
+
+
+def test_email_with_semicolon_does_not_forge_a_property():
+    ics = build_ics_event("u", "S", datetime(2026, 1, 1), datetime(2026, 1, 1),
+                          "a;b@x.com", attendees=["c;d@x.com"])
+    # the ';' stays inside the mailto value; no new property line appears
+    assert "mailto:a;b@x.com" in ics and "mailto:c;d@x.com" in ics
+    assert not any(ln.startswith("X-") for ln in _physical_lines(ics))
+
+
+def test_email_with_crlf_is_refused():
+    with pytest.raises(ValueError):
+        build_ics_event("u", "S", datetime(2026, 1, 1), datetime(2026, 1, 1),
+                        "o@x.com\r\nX-PWNED:1")
+    with pytest.raises(ValueError):
+        build_ics_event("u", "S", datetime(2026, 1, 1), datetime(2026, 1, 1),
+                        "o@x.com", attendees=["ok@x.com", "evil@x.com\r\nATTENDEE:forged"])
+
+
+def test_cancel_refuses_crlf_in_uid_and_email():
+    with pytest.raises(ValueError):
+        build_ics_cancel("u\r\nX:1", "S", datetime(2026, 1, 1), datetime(2026, 1, 1), "o@x.com")
+    with pytest.raises(ValueError):
+        build_ics_cancel("u", "S", datetime(2026, 1, 1), datetime(2026, 1, 1),
+                         "o@x.com\r\nX:1")
+
+
+def test_long_line_is_folded_to_75_octets():
+    long_summary = "Belmira Quostral Vendrim " * 8   # ~200 octets, well over 75
+    ics = build_ics_event("u", long_summary, datetime(2026, 1, 1), datetime(2026, 1, 1),
+                          "o@x.com")
+    lines = _physical_lines(ics)
+    # no physical line exceeds the 75-octet limit
+    for ln in lines:
+        assert len(ln.encode("utf-8")) <= 75, (len(ln.encode("utf-8")), ln)
+    # at least one continuation line (begins with a single space) was produced
+    assert any(ln.startswith(" ") for ln in lines)
+    # unfolding (drop CRLF + the one leading space) reconstructs the whole SUMMARY value
+    unfolded = ics.replace("\r\n ", "")
+    assert ("SUMMARY:" + long_summary.strip()) in unfolded
+
+
+def test_multibyte_summary_folds_without_splitting_a_codepoint():
+    ics = build_ics_event("u", "café " * 30, datetime(2026, 1, 1), datetime(2026, 1, 1),
+                          "o@x.com")
+    # every physical line is valid UTF-8 (no codepoint was cut across a fold)
+    for ln in _physical_lines(ics):
+        ln.encode("utf-8").decode("utf-8")
+        assert len(ln.encode("utf-8")) <= 75

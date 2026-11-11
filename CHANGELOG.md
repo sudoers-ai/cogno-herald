@@ -4,7 +4,20 @@
 
 Publishes every «Unreleased» entry below, merged since 0.1.0. No change of its own.
 
-## Unreleased
+## 0.1.2 — 2026-11-11
+
+- **The `.ics` builders are hardened against calendar injection (RFC 5545).**
+  - `UID` and e-mail addresses reach `build_ics_event` / `build_ics_cancel` from outside (an
+    appointment id, a guest's address). A raw CR or LF in `uid`, `organizer_email` or an
+    attendee address could end the content line early and forge a property (`UID:x\r\nSUMMARY:…`,
+    a spoofed `ATTENDEE`). Those identifier/address fields now reject a raw CR/LF loudly
+    (`ValueError`), and the `UID` is TEXT-escaped (`\ ; ,`) like the other TEXT values.
+  - `_ical_escape` now also collapses every newline form (`\r\n`, a lone `\r`, `\n`) to the
+    RFC literal `\n`, so a newline in free text (a multi-line DESCRIPTION) is preserved as
+    content and can never break the line structure.
+  - Content lines are folded to 75 octets (§3.1), on a character boundary so a multi-byte
+    UTF-8 codepoint is never split; an unfolding parser reconstructs the value.
+  - Short, well-formed invites are byte-for-byte unchanged.
 
 - **No log line carries an e-mail address, nor the text of an exception.**
   - Before, every OTP line about a code logged the address it was for (`email=`): `sent`,

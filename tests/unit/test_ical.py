@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import pytest
+
 from cogno_herald.ical import _ical_escape, build_ics_cancel, build_ics_event
 
 
@@ -201,8 +203,6 @@ def test_a_zone_name_that_could_inject_a_parameter_falls_back_to_UTC():
 # UID and the e-mail addresses reach these builders from outside (an appointment id, a
 # guest's address). A ';' must not open a parameter and a CR/LF must not end the line and
 # forge a new property; a line over 75 octets must be folded, not emitted raw.
-
-import pytest
 
 
 def _physical_lines(ics: str) -> list[str]:

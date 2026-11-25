@@ -221,6 +221,7 @@ class _SMTP(smtplib.SMTP):
     """
 
     connect_timeout: float = _CONNECT_FALLBACK_S
+    _host: str   # set by SMTP.__init__ from its host argument; STARTTLS verifies the cert against it
 
     def _get_socket(self, host: str, port: int, timeout: float) -> socket.socket:
         try:
@@ -239,6 +240,7 @@ def _dial(host: str, port: int, *, connect_timeout: float,
     connect to retry.
     """
     server = _SMTP(timeout=_SESSION_TIMEOUT_S, source_address=source_address)   # no host → no connect yet
+    server._host = host   # what SMTP.__init__ sets from its host argument; STARTTLS verifies the certificate against it
     server.connect_timeout = connect_timeout
     code, msg = server.connect(host, port)
     if code != 220:

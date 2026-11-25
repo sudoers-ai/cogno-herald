@@ -155,7 +155,7 @@ def test_when_both_connects_fail_the_error_is_clean(dial):
 
 def test_the_fallback_log_names_the_connect_error_class_and_no_host(dial, caplog):
     """The fallback line names the ORIGINAL connect exception's class — and never the host."""
-    d = dial([ConnectionRefusedError("refused"), _FakeSocket()])
+    dial([ConnectionRefusedError("refused"), _FakeSocket()])
     with caplog.at_level(logging.INFO, logger="cogno_herald.smtp"):
         server = _open("secret-relay.test", 587)
     lines = [r.getMessage() for r in caplog.records
@@ -164,6 +164,37 @@ def test_the_fallback_log_names_the_connect_error_class_and_no_host(dial, caplog
     assert "error=ConnectionRefusedError" in lines[0]
     assert "secret-relay.test" not in lines[0]
     server.close()
+
+
+def test_dial_sets_the_connected_host_for_starttls(dial):
+    """``_dial`` builds ``_SMTP`` with no host (so it does not connect in the constructor), then
+    sets ``_host`` to the real host — STARTTLS verifies the certificate against it, and an empty
+    ``_host`` would make a verifying context raise ``ValueError``."""
+    dial([_FakeSocket()])
+    server = _open("relay.test", 587)
+    assert server._host == "relay.test"
+    assert server._host != ""
+    server.close()
+
+
+def test_starttls_verifies_against_the_connected_host(dial, monkeypatch):
+    """STARTTLS wraps the socket with ``server_hostname=self._host``. With the ``_host`` fix that
+    is the connected host, never ``''`` — a default (verifying) context rejects an empty name."""
+    recorded = {}
+
+    class _Ctx:
+        def wrap_socket(self, sock, server_hostname=None):
+            recorded["server_hostname"] = server_hostname
+            return sock
+
+    dial([_FakeSocket()])
+    server = _open("relay.test", 587)
+    # drive only the TLS wrap: stub the EHLO/command dialog so no SMTP bytes are needed.
+    monkeypatch.setattr(server, "ehlo_or_helo_if_needed", lambda: None)
+    monkeypatch.setattr(server, "docmd", lambda *a, **k: (220, b"go ahead"))
+    server.starttls(context=_Ctx())
+    assert recorded["server_hostname"] == "relay.test"
+    assert recorded["server_hostname"] != ""
 
 
 def test_a_failure_after_the_connection_is_never_retried(monkeypatch):

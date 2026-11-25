@@ -26,6 +26,11 @@ Publishes every «Unreleased» entry below, merged since 0.1.0. No change of its
     `OSError` subclass), and only that type triggers the fallback.
   - Logs `event=smtp_ipv4_connect_failed` (INFO) with the failed connect's exception CLASS only
     when the IPv4 attempt falls back — never the host, never a user.
+  - STARTTLS still verifies the certificate against the connected host: `_dial` sets `_host` on the
+    connection it builds, so a verifying context never wraps with an empty `server_hostname`
+    (which would raise `ValueError`). A real STARTTLS round trip
+    (`tests/unit/test_smtp_starttls_roundtrip.py`) proves it — the test TLS material is generated
+    per run with `trustme`; no key is committed.
   - `tests/unit/test_smtp_ipv4_first.py` pins it with a fake `socket.create_connection`: IPv4 ok →
     one connect with the source address and the socket widened to the 30 s session timeout; a
     connect failure → a second connect with no source address and the 8 s cap; a slow greeting →

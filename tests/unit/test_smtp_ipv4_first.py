@@ -1,17 +1,19 @@
-"""``_open`` tries IPv4 first, then the default path — and never retries past the connection.
+"""``_open`` caps the TCP CONNECT short and tries IPv4 first; the greeting keeps the session cap.
 
 ``smtplib`` connects family by family in ``getaddrinfo`` order (IPv6 first), in series, with no
-happy eyeballs, so a broken IPv6 route costs the whole timeout before IPv4. ``_open`` binds the
-source to the IPv4 wildcard under a short cap to try IPv4 first, and on a connect-or-greeting
-failure — nothing sent yet — falls back to the default path under a longer cap. A failure AFTER the
-connection (STARTTLS, login, the send) is never retried: the message could then go out twice.
+happy eyeballs, so a broken IPv6 route costs the whole connect cap before IPv4. ``_open`` tries
+IPv4 first (source bound to the ``0.0.0.0`` wildcard) under a short connect cap, and on a TCP
+connect failure — nothing sent, no greeting read — falls back to the default path under a longer
+connect cap. Only the CONNECT is capped short and retried: the greeting (RFC 5321 §4.5.3.2.1 lets a
+server delay its 220) and the whole session keep the session timeout, and a failure once the
+connection exists — a slow/absent greeting, a non-220 reply, STARTTLS, login, the send — is never
+retried, so the message can never go out twice.
 
-``smtplib.SMTP`` is a recording fake here (no network): it captures each construction's kwargs and
-can be scripted to fail the Nth one, so a test can watch which family order ``_open`` takes.
+The short cap lives on ``socket.create_connection`` (patched here): a fake socket speaks only the
+greeting, which is all ``_open`` reads.
 """
 
 import logging
-import socket
 import smtplib
 
 import pytest
@@ -27,131 +29,196 @@ from cogno_herald.smtp import (
 )
 
 
-class _Sock:
-    def __init__(self) -> None:
-        self.timeout = None
+class _FakeFile:
+    def __init__(self, lines):
+        self._lines = list(lines)
+
+    def readline(self, *a):
+        return self._lines.pop(0) if self._lines else b""
+
+    def close(self):
+        ...
+
+
+class _FakeSocket:
+    """Speaks one SMTP line — the greeting — which is all ``_open`` reads. It records every
+    ``settimeout`` so a test can see the connect cap never reaches the greeting/session."""
+
+    def __init__(self, greeting=b"220 fake ESMTP\r\n"):
+        self._greeting = greeting
+        self.timeouts = []
 
     def settimeout(self, timeout):
-        self.timeout = timeout
+        self.timeouts.append(timeout)
+
+    def gettimeout(self):
+        return self.timeouts[-1] if self.timeouts else None
+
+    def makefile(self, *a, **k):
+        return _FakeFile([self._greeting])
+
+    def sendall(self, data):
+        ...
+
+    def close(self):
+        ...
 
 
-class RecordingSMTP:
-    """Records each construction's kwargs; ``fail[i]`` (if set) is raised by the i-th construction."""
+class _Dialer:
+    """A fake ``socket.create_connection``: records each call's args, and returns the next prepared
+    outcome — a ``_FakeSocket`` to hand back, or an exception to raise (a connect failure)."""
 
-    constructions: list = []
-    fail: list = []
-    sock_none: list = []
+    def __init__(self, outcomes):
+        self.calls = []
+        self._outcomes = list(outcomes)
 
-    def __init__(self, host, port, timeout=30, source_address=None):
-        idx = len(RecordingSMTP.constructions)
-        RecordingSMTP.constructions.append(
-            {"host": host, "port": port, "timeout": timeout, "source_address": source_address})
-        exc = RecordingSMTP.fail[idx] if idx < len(RecordingSMTP.fail) else None
-        if exc is not None:
-            raise exc
-        none = RecordingSMTP.sock_none[idx] if idx < len(RecordingSMTP.sock_none) else False
-        self.sock = None if none else _Sock()
-
-    def ehlo(self): ...
-    def starttls(self, context=None): ...
-    def login(self, user, password): ...
-    def sendmail(self, from_email, recipients, payload): ...
-    def quit(self): ...
-
-
-class _LoginFailsSMTP(RecordingSMTP):
-    """Connects fine, then refuses the login — the failure is AFTER the connection."""
-
-    def login(self, user, password):
-        raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
-
-
-@pytest.fixture(autouse=True)
-def _reset():
-    RecordingSMTP.constructions = []
-    RecordingSMTP.fail = []
-    RecordingSMTP.sock_none = []
-    yield
+    def __call__(self, address, timeout=None, source_address=None):
+        self.calls.append({"address": address, "timeout": timeout, "source_address": source_address})
+        out = self._outcomes.pop(0)
+        if isinstance(out, BaseException):
+            raise out
+        return out
 
 
 @pytest.fixture
-def patched(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RecordingSMTP)
-    return RecordingSMTP
+def dial(monkeypatch):
+    def _install(outcomes):
+        d = _Dialer(outcomes)
+        monkeypatch.setattr(smtp.socket, "create_connection", d)
+        return d
+    return _install
 
 
-def test_ipv4_ok_is_one_constructor_with_source_address(patched):
-    """IPv4 connects: a single constructor, bound to ``0.0.0.0`` under the short cap, and the
-    socket is then widened to the full session timeout."""
+def test_ipv4_connects_once_with_source_address_and_the_session_timeout(dial):
+    """IPv4 connects: a single ``create_connection`` bound to ``0.0.0.0`` under the short connect
+    cap, and the socket is then widened to the full session timeout for the greeting and session."""
+    sock = _FakeSocket()
+    d = dial([sock])
     server = _open("relay.test", 587)
-    (c,) = patched.constructions
-    assert c["source_address"] == ("0.0.0.0", 0)
+    assert len(d.calls) == 1
+    c = d.calls[0]
+    assert c["address"] == ("relay.test", 587)
     assert c["timeout"] == _CONNECT_IPV4_S
-    assert server.sock.timeout == _SESSION_TIMEOUT_S
+    assert c["source_address"] == ("0.0.0.0", 0)
+    assert sock.gettimeout() == _SESSION_TIMEOUT_S
+    server.close()
 
 
 @pytest.mark.parametrize("exc", [
+    ConnectionRefusedError("refused"),
+    TimeoutError("timed out"),
     OSError("network unreachable"),
-    socket.timeout("timed out"),
-    smtplib.SMTPServerDisconnected("no greeting"),
 ])
-def test_ipv4_failure_falls_back_without_source_address(patched, exc):
-    """A connect or greeting failure (every one of these is an ``OSError``) → a second constructor
-    on the default path, with NO ``source_address`` and the longer cap; the server comes back."""
-    patched.fail = [exc]
+def test_a_connect_failure_falls_back_without_source_address(dial, exc):
+    """A TCP connect failure (nothing sent) → a second ``create_connection`` on the default path,
+    with NO source address and the longer connect cap; the server comes back."""
+    sock2 = _FakeSocket()
+    d = dial([exc, sock2])
     server = _open("relay.test", 587)
-    first, second = patched.constructions
-    assert first["source_address"] == ("0.0.0.0", 0) and first["timeout"] == _CONNECT_IPV4_S
-    assert second["source_address"] is None and second["timeout"] == _CONNECT_FALLBACK_S
-    assert server.sock.timeout == _SESSION_TIMEOUT_S
+    assert len(d.calls) == 2
+    assert d.calls[0]["timeout"] == _CONNECT_IPV4_S and d.calls[0]["source_address"] == ("0.0.0.0", 0)
+    assert d.calls[1]["timeout"] == _CONNECT_FALLBACK_S and d.calls[1]["source_address"] is None
+    server.close()
 
 
-def test_both_families_fail_raises_the_second_exception_clean(patched):
-    """When the fallback also fails, its exception propagates clean (unwrapped), not the first."""
-    first, second = OSError("ipv6 down"), OSError("ipv4 down too")
-    patched.fail = [first, second]
+def test_a_slow_greeting_is_not_capped_by_the_connect_timeout(dial):
+    """The greeting is read under the SESSION timeout, never the short connect cap, so a relay that
+    delays its 220 (RFC 5321 §4.5.3.2.1 allows up to five minutes) connects with no fallback: the
+    short cap went to ``create_connection``, and the socket was widened to the session timeout."""
+    sock = _FakeSocket(greeting=b"220 slow but valid\r\n")
+    d = dial([sock])
+    server = _open("relay.test", 587)
+    assert len(d.calls) == 1                       # a greeting delay never triggers a fallback
+    assert d.calls[0]["timeout"] == _CONNECT_IPV4_S  # the short cap is on the CONNECT only
+    assert sock.gettimeout() == _SESSION_TIMEOUT_S   # the greeting/session runs at the session cap
+    server.close()
+
+
+def test_a_refused_greeting_raises_and_is_not_retried(dial):
+    """A non-220 greeting means the connection existed, so it is NOT a connect to retry: ``_open``
+    raises ``SMTPConnectError`` and opens no second connection."""
+    d = dial([_FakeSocket(greeting=b"554 no SMTP service here\r\n")])
+    with pytest.raises(smtplib.SMTPConnectError):
+        _open("relay.test", 587)
+    assert len(d.calls) == 1
+
+
+def test_when_both_connects_fail_the_error_is_clean(dial):
+    """Both families fail to connect: the fallback's failure surfaces as ``_ConnectFailed`` (an
+    ``OSError``), unwrapped, after exactly two attempts."""
+    d = dial([ConnectionRefusedError("ipv6 down"), ConnectionRefusedError("ipv4 down too")])
     with pytest.raises(OSError) as ei:
         _open("relay.test", 587)
-    assert ei.value is second
-    assert len(patched.constructions) == 2
+    assert isinstance(ei.value, smtp._ConnectFailed)
+    assert len(d.calls) == 2
 
 
-def test_a_socketless_connect_raises_and_is_not_retried(patched):
-    """``SMTP.sock`` is Optional: a constructor that returns without a socket is a broken
-    connection, so ``_open`` raises ``SMTPServerDisconnected`` (an ``OSError``) — it does NOT open a
-    second constructor, and never proceeds on the short connect cap."""
-    patched.sock_none = [True]
-    with pytest.raises(smtplib.SMTPServerDisconnected):
-        _open("relay.test", 587)
-    assert len(patched.constructions) == 1
-
-
-def test_a_failure_after_the_connection_is_never_retried(monkeypatch):
-    """A login error happens AFTER a good connect, so there is no second constructor — retrying it
-    could send the message twice."""
-    monkeypatch.setattr(smtp.smtplib, "SMTP", _LoginFailsSMTP)
-    cfg = {"host": "relay.test", "port": 587, "user": "u", "password": "p", "use_tls": True}
-    with pytest.raises(smtplib.SMTPAuthenticationError):
-        _connect(cfg)
-    assert len(RecordingSMTP.constructions) == 1
-
-
-def test_the_fallback_log_carries_the_class_and_no_host(patched, caplog):
-    """The fallback line names the exception's CLASS only — never the host, never a user."""
-    patched.fail = [OSError("boom")]
+def test_the_fallback_log_names_the_connect_error_class_and_no_host(dial, caplog):
+    """The fallback line names the ORIGINAL connect exception's class — and never the host."""
+    d = dial([ConnectionRefusedError("refused"), _FakeSocket()])
     with caplog.at_level(logging.INFO, logger="cogno_herald.smtp"):
-        _open("secret-relay.test", 587)
+        server = _open("secret-relay.test", 587)
     lines = [r.getMessage() for r in caplog.records
              if "event=smtp_ipv4_connect_failed" in r.getMessage()]
     assert len(lines) == 1
-    assert "error=OSError" in lines[0]
+    assert "error=ConnectionRefusedError" in lines[0]
     assert "secret-relay.test" not in lines[0]
+    server.close()
 
 
-async def test_send_still_goes_out_when_the_ipv4_connect_fails(patched):
-    """End to end: the IPv4 connect fails, the fallback carries the message, the send succeeds."""
-    patched.fail = [OSError("ipv6 route down")]
+def test_a_failure_after_the_connection_is_never_retried(monkeypatch):
+    """A login error happens AFTER a good connect, so ``_open`` dials exactly once — retrying it
+    could send the message twice. (``_dial`` is stubbed: the retry decision is ``_open``'s.)"""
+    dials = []
+
+    class _Srv:
+        def __init__(self):
+            self.sock = _FakeSocket()
+
+        def ehlo(self): ...
+        def starttls(self, context=None): ...
+        def login(self, user, password):
+            raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+        def quit(self): ...
+        def close(self): ...
+
+    def fake_dial(host, port, *, connect_timeout, source_address=None):
+        dials.append(connect_timeout)
+        return _Srv()
+
+    monkeypatch.setattr(smtp, "_dial", fake_dial)
+    cfg = {"host": "relay.test", "port": 587, "user": "u", "password": "p", "use_tls": True}
+    with pytest.raises(smtplib.SMTPAuthenticationError):
+        _connect(cfg)
+    assert len(dials) == 1
+
+
+async def test_send_still_goes_out_when_the_ipv4_connect_fails(monkeypatch):
+    """End to end over the ``_SMTP`` seam: the IPv4 connect fails, the fallback carries the message,
+    and the send succeeds — two connections, one send."""
+    made = []
+
+    class _FallbackSMTP:
+        def __init__(self, timeout=None, source_address=None):
+            made.append(source_address)
+            self.sock = _FakeSocket()
+            self.source_address = source_address
+            self.connect_timeout = None
+
+        def connect(self, host, port):
+            if self.source_address is not None:
+                raise smtp._ConnectFailed("ConnectionRefusedError")
+            return (220, b"ok")
+
+        def ehlo(self): ...
+        def starttls(self, context=None): ...
+        def login(self, user, password): ...
+        def sendmail(self, from_email, recipients, payload): ...
+        def quit(self): ...
+        def close(self): ...
+
+    monkeypatch.setattr(smtp, "_SMTP", _FallbackSMTP)
     cfg = {"host": "relay.test", "port": 587, "from_email": "f@x.test", "use_tls": False}
     result = await send_plain_email(cfg, ["a@x.com"], "S", "body")
     assert result == {"sent": True, "recipients": ["a@x.com"]}
-    assert len(patched.constructions) == 2
+    assert made == [("0.0.0.0", 0), None]   # IPv4 (bound) failed, the default path sent

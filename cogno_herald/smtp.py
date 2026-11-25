@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import smtplib
+import socket
 import ssl
 from email import encoders
 from email.header import Header
@@ -198,36 +199,76 @@ def _tls_context(smtp_config: SmtpConfig) -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
-#: IPv4 first with a short connect+greeting cap, then the default path (IPv6/any) — smtplib
-#: connects sequentially, family by family, with no happy eyeballs.
+#: IPv4 first with a short cap on the TCP CONNECT only, then the default path (IPv6/any) — smtplib
+#: connects sequentially, family by family, with no happy eyeballs. The greeting and the whole
+#: session keep ``_SESSION_TIMEOUT_S`` (RFC 5321 §4.5.3.2.1 lets a server delay its 220 greeting).
 _CONNECT_IPV4_S = 3.0
 _CONNECT_FALLBACK_S = 8.0
 _SESSION_TIMEOUT_S = 30.0
 
 
+class _ConnectFailed(OSError):
+    """The TCP connect itself failed — nothing was sent and no greeting was read."""
+
+
+class _SMTP(smtplib.SMTP):
+    """``smtplib.SMTP`` whose TCP CONNECT has its own short cap; the greeting and the session keep
+    the session timeout (RFC 5321 §4.5.3.2.1 lets a server delay its 220 by up to five minutes).
+
+    Capping the whole connect at a few seconds would retry a relay that greets slowly (a tarpit /
+    greet-pause, or a tenant's own SMTP), so the short cap is on ``create_connection`` alone; the
+    socket is then widened to the session timeout before the greeting is read.
+    """
+
+    connect_timeout: float = _CONNECT_FALLBACK_S
+
+    def _get_socket(self, host: str, port: int, timeout: float) -> socket.socket:
+        try:
+            sock = socket.create_connection((host, port), self.connect_timeout, self.source_address)
+        except OSError as exc:   # the TCP connect failed — nothing sent, no greeting read
+            raise _ConnectFailed(type(exc).__name__) from exc
+        sock.settimeout(timeout)   # the greeting and the whole session keep _SESSION_TIMEOUT_S
+        return sock
+
+
+def _dial(host: str, port: int, *, connect_timeout: float,
+          source_address: Optional[tuple] = None) -> smtplib.SMTP:
+    """Open and greet one SMTP connection: a short cap on the TCP connect, the session timeout on
+    the greeting and the rest. A connect failure raises ``_ConnectFailed``; a greeting that never
+    comes, or a non-220 reply, raises past the caller — the connection existed, so it is not a
+    connect to retry.
+    """
+    server = _SMTP(timeout=_SESSION_TIMEOUT_S, source_address=source_address)   # no host → no connect yet
+    server.connect_timeout = connect_timeout
+    code, msg = server.connect(host, port)
+    if code != 220:
+        server.close()
+        raise smtplib.SMTPConnectError(code, msg)
+    return server
+
+
 def _open(host: str, port: int) -> smtplib.SMTP:
-    """Open the SMTP connection, trying IPv4 first.
+    """Open the SMTP connection, trying IPv4 first — a short cap on the TCP connect only.
 
     ``smtplib`` connects family by family in ``getaddrinfo`` order (IPv6 first), in series, with no
-    happy eyeballs, so a broken IPv6 route costs the whole timeout before the IPv4 attempt. Bind
-    the source to the IPv4 wildcard (``0.0.0.0``) under a short cap to try IPv4 first; on any
-    connect or greeting failure — nothing of the message has gone out yet — fall back to the
-    default path (IPv6/any) under a longer cap.
+    happy eyeballs, so a broken IPv6 route costs the whole connect cap before the IPv4 attempt. Try
+    IPv4 first (source bound to the ``0.0.0.0`` wildcard) under a short connect cap; on a TCP
+    connect failure — nothing sent, no greeting read — fall back to the default path (IPv6/any)
+    under a longer connect cap.
 
-    Only the connection (and the server's greeting) is retried. A failure AFTER it — STARTTLS,
-    login, the send — is never retried here: the message could then go out twice. ``SMTPException``
-    is an ``OSError`` (since 3.4), and only the constructor is inside the ``try``.
+    Only the TCP CONNECT is capped short and retried. The greeting (RFC 5321 §4.5.3.2.1 lets a
+    server delay its 220) and the whole session keep the session timeout, and a failure once the
+    connection exists — a slow or absent greeting, a non-220 reply, STARTTLS, login, the send — is
+    never retried: the connection existed and the message could then go out twice.
 
-    ``SMTP.sock`` is ``Optional``: a constructor that returns without a socket is a broken
-    connection, not a session to proceed with. Raise ``SMTPServerDisconnected`` (an ``OSError``
-    subclass) so the sender handles it like any other connect failure — never a silent skip that
-    would leave the session on the short connect cap.
+    ``SMTP.sock`` is ``Optional``: should a connect return without a socket, it is a broken
+    connection, not a session to proceed with — raise ``SMTPServerDisconnected`` (an ``OSError``).
     """
     try:
-        server = smtplib.SMTP(host, port, timeout=_CONNECT_IPV4_S, source_address=("0.0.0.0", 0))
-    except OSError as exc:   # connect or greeting failed — nothing of the message was sent
-        logger.info("stage=email event=smtp_ipv4_connect_failed error=%s", type(exc).__name__)
-        server = smtplib.SMTP(host, port, timeout=_CONNECT_FALLBACK_S)
+        server = _dial(host, port, connect_timeout=_CONNECT_IPV4_S, source_address=("0.0.0.0", 0))
+    except _ConnectFailed as exc:   # the TCP connect failed — nothing sent, no greeting read
+        logger.info("stage=email event=smtp_ipv4_connect_failed error=%s", exc)
+        server = _dial(host, port, connect_timeout=_CONNECT_FALLBACK_S)
     if server.sock is None:
         raise smtplib.SMTPServerDisconnected("no socket after connect")
     server.sock.settimeout(_SESSION_TIMEOUT_S)   # the session (STARTTLS, login, DATA) keeps 30 s

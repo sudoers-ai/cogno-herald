@@ -28,11 +28,19 @@ class _FakeSock:
 
 
 class FakeSMTP:
+    """Stands in for ``smtp._SMTP``: ``_dial`` builds it with no host, then calls ``connect``."""
+
     sent: list = []
 
-    def __init__(self, host, port, timeout=30, source_address=None):
+    def __init__(self, timeout=None, source_address=None):
         self.sock = _FakeSock()
+        self.source_address = source_address
+        self.connect_timeout = None
         FakeSMTP.sent = []
+
+    def connect(self, host, port):
+        self.sock = _FakeSock()
+        return (220, b"ok")
 
     def ehlo(self): ...
     def starttls(self, context=None): ...
@@ -40,12 +48,13 @@ class FakeSMTP:
     def sendmail(self, from_email, recipients, payload):
         FakeSMTP.sent.append((from_email, recipients, payload))
     def quit(self): ...
+    def close(self): ...
 
 
 @pytest.fixture(autouse=True)
 def _patch_smtp(monkeypatch):
     FakeSMTP.sent = []   # a send that never connects must not see the previous test's message
-    monkeypatch.setattr(smtp.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", FakeSMTP)
 
 
 def _send_html():
@@ -133,7 +142,7 @@ async def test_a_refused_recipient_never_raises_and_the_log_names_no_address(mon
         def sendmail(self, from_email, recipients, payload):
             raise smtplib.SMTPRecipientsRefused({r: (550, b"no such user") for r in recipients})
 
-    monkeypatch.setattr(smtp.smtplib, "SMTP", Refusing)
+    monkeypatch.setattr(smtp, "_SMTP", Refusing)
     with caplog.at_level(logging.WARNING, logger="cogno_herald.smtp"):
         result = await _send_html()(CONFIG, [TO], "S", TEXT, HTML)
     assert result["sent"] is False and result["error"]

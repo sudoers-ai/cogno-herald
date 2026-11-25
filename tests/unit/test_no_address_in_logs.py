@@ -51,23 +51,31 @@ class _FakeSock:
 
 
 class FakeSMTP:
-    def __init__(self, host, port, timeout=30, source_address=None):
+    """Stands in for ``smtp._SMTP``: ``_dial`` builds it with no host, then calls ``connect``."""
+
+    def __init__(self, timeout=None, source_address=None):
         self.sock = _FakeSock()
+        self.source_address = source_address
+        self.connect_timeout = None
+    def connect(self, host, port):
+        self.sock = _FakeSock()
+        return (220, b"ok")
     def ehlo(self): ...
     def starttls(self, context=None): ...
     def login(self, user, password): ...
     def sendmail(self, from_email, recipients, payload): ...
     def quit(self): ...
+    def close(self): ...
 
 
 class _IPv4BrokenSMTP(FakeSMTP):
-    """The IPv4-first constructor fails (a broken route); the fallback one connects. The failure
-    path logs ``event=smtp_ipv4_connect_failed`` — and it must carry no address."""
+    """The IPv4-first connect fails (a broken route); the fallback one connects. The failure path
+    logs ``event=smtp_ipv4_connect_failed`` — and it must carry no address."""
 
-    def __init__(self, host, port, timeout=30, source_address=None):
-        if source_address is not None:
-            raise OSError("network unreachable")
-        super().__init__(host, port, timeout=timeout)
+    def connect(self, host, port):
+        if self.source_address is not None:
+            raise smtp._ConnectFailed("ConnectionRefusedError")
+        return super().connect(host, port)
 
 
 class RefusingSMTP(FakeSMTP):
@@ -80,7 +88,7 @@ class RefusingSMTP(FakeSMTP):
 
 @pytest.fixture(autouse=True)
 def _fake_smtp(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", FakeSMTP)
 
 
 # ── the check ─────────────────────────────────────────────────────────────────────────────────
@@ -170,17 +178,17 @@ async def _smtp_sent_ics(monkeypatch):
 
 
 async def _smtp_failed_plain(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_plain_email(CONFIG, [SENTINEL], "S", "body"))["sent"]
 
 
 async def _smtp_failed_html(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_html_email(CONFIG, [SENTINEL], "S", "body", "<p>body</p>"))["sent"]
 
 
 async def _smtp_failed_ics(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_email_with_ics(CONFIG, [SENTINEL], "S", "body", ICS))["sent"]
 
 
@@ -190,7 +198,7 @@ async def _smtp_tls_unverified(monkeypatch):
 
 
 async def _smtp_ipv4_connect_failed(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", _IPv4BrokenSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", _IPv4BrokenSMTP)
     assert (await send_plain_email(CONFIG, [SENTINEL], "S", "body"))["sent"]
 
 

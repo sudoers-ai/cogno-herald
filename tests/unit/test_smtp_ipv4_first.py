@@ -189,9 +189,11 @@ def test_starttls_verifies_against_the_connected_host(dial, monkeypatch):
 
     dial([_FakeSocket()])
     server = _open("relay.test", 587)
-    # drive only the TLS wrap: stub the EHLO/command dialog so no SMTP bytes are needed.
+    # drive only the TLS wrap: stub the EHLO/command dialog so no SMTP bytes are needed, and
+    # advertise STARTTLS so ``starttls()`` reaches ``wrap_socket`` instead of refusing early.
     monkeypatch.setattr(server, "ehlo_or_helo_if_needed", lambda: None)
     monkeypatch.setattr(server, "docmd", lambda *a, **k: (220, b"go ahead"))
+    server.esmtp_features["starttls"] = ""   # what EHLO would record; has_extn("starttls") → True
     server.starttls(context=_Ctx())
     assert recorded["server_hostname"] == "relay.test"
     assert recorded["server_hostname"] != ""

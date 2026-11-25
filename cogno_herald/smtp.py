@@ -217,12 +217,19 @@ def _open(host: str, port: int) -> smtplib.SMTP:
     Only the connection (and the server's greeting) is retried. A failure AFTER it — STARTTLS,
     login, the send — is never retried here: the message could then go out twice. ``SMTPException``
     is an ``OSError`` (since 3.4), and only the constructor is inside the ``try``.
+
+    ``SMTP.sock`` is ``Optional``: a constructor that returns without a socket is a broken
+    connection, not a session to proceed with. Raise ``SMTPServerDisconnected`` (an ``OSError``
+    subclass) so the sender handles it like any other connect failure — never a silent skip that
+    would leave the session on the short connect cap.
     """
     try:
         server = smtplib.SMTP(host, port, timeout=_CONNECT_IPV4_S, source_address=("0.0.0.0", 0))
     except OSError as exc:   # connect or greeting failed — nothing of the message was sent
         logger.info("stage=email event=smtp_ipv4_connect_failed error=%s", type(exc).__name__)
         server = smtplib.SMTP(host, port, timeout=_CONNECT_FALLBACK_S)
+    if server.sock is None:
+        raise smtplib.SMTPServerDisconnected("no socket after connect")
     server.sock.settimeout(_SESSION_TIMEOUT_S)   # the session (STARTTLS, login, DATA) keeps 30 s
     return server
 

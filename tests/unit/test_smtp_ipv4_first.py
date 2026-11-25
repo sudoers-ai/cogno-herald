@@ -40,6 +40,7 @@ class RecordingSMTP:
 
     constructions: list = []
     fail: list = []
+    sock_none: list = []
 
     def __init__(self, host, port, timeout=30, source_address=None):
         idx = len(RecordingSMTP.constructions)
@@ -48,7 +49,8 @@ class RecordingSMTP:
         exc = RecordingSMTP.fail[idx] if idx < len(RecordingSMTP.fail) else None
         if exc is not None:
             raise exc
-        self.sock = _Sock()
+        none = RecordingSMTP.sock_none[idx] if idx < len(RecordingSMTP.sock_none) else False
+        self.sock = None if none else _Sock()
 
     def ehlo(self): ...
     def starttls(self, context=None): ...
@@ -68,6 +70,7 @@ class _LoginFailsSMTP(RecordingSMTP):
 def _reset():
     RecordingSMTP.constructions = []
     RecordingSMTP.fail = []
+    RecordingSMTP.sock_none = []
     yield
 
 
@@ -111,6 +114,16 @@ def test_both_families_fail_raises_the_second_exception_clean(patched):
         _open("relay.test", 587)
     assert ei.value is second
     assert len(patched.constructions) == 2
+
+
+def test_a_socketless_connect_raises_and_is_not_retried(patched):
+    """``SMTP.sock`` is Optional: a constructor that returns without a socket is a broken
+    connection, so ``_open`` raises ``SMTPServerDisconnected`` (an ``OSError``) — it does NOT open a
+    second constructor, and never proceeds on the short connect cap."""
+    patched.sock_none = [True]
+    with pytest.raises(smtplib.SMTPServerDisconnected):
+        _open("relay.test", 587)
+    assert len(patched.constructions) == 1
 
 
 def test_a_failure_after_the_connection_is_never_retried(monkeypatch):

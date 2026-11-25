@@ -40,11 +40,24 @@ ICS = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:
 STRICT_LIMIT = 1001
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
+    """Stands in for ``smtp._SMTP``: ``_dial`` builds it with no host, then calls ``connect``."""
+
     sent: list = []
 
-    def __init__(self, host, port, timeout=30):
+    def __init__(self, timeout=None, source_address=None):
+        self.sock = _FakeSock()
+        self.source_address = source_address
+        self.connect_timeout = None
         FakeSMTP.sent = []
+
+    def connect(self, host, port):
+        self.sock = _FakeSock()
+        return (220, b"ok")
 
     def ehlo(self): ...
     def starttls(self, context=None): ...
@@ -52,12 +65,13 @@ class FakeSMTP:
     def sendmail(self, from_email, recipients, payload):
         FakeSMTP.sent.append((from_email, recipients, payload))
     def quit(self): ...
+    def close(self): ...
 
 
 @pytest.fixture(autouse=True)
 def _patch_smtp(monkeypatch):
     FakeSMTP.sent = []
-    monkeypatch.setattr(smtp.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", FakeSMTP)
 
 
 def _wire() -> bytes:

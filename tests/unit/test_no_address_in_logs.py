@@ -46,13 +46,36 @@ LOGGERS = ("cogno_herald.otp", "cogno_herald.smtp")
 _EVENT = re.compile(r"event=(\w+)")
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
-    def __init__(self, host, port, timeout=30): ...
+    """Stands in for ``smtp._SMTP``: ``_dial`` builds it with no host, then calls ``connect``."""
+
+    def __init__(self, timeout=None, source_address=None):
+        self.sock = _FakeSock()
+        self.source_address = source_address
+        self.connect_timeout = None
+    def connect(self, host, port):
+        self.sock = _FakeSock()
+        return (220, b"ok")
     def ehlo(self): ...
     def starttls(self, context=None): ...
     def login(self, user, password): ...
     def sendmail(self, from_email, recipients, payload): ...
     def quit(self): ...
+    def close(self): ...
+
+
+class _IPv4BrokenSMTP(FakeSMTP):
+    """The IPv4-first connect fails (a broken route); the fallback one connects. The failure path
+    logs ``event=smtp_ipv4_connect_failed`` — and it must carry no address."""
+
+    def connect(self, host, port):
+        if self.source_address is not None:
+            raise smtp._ConnectFailed("ConnectionRefusedError")
+        return super().connect(host, port)
 
 
 class RefusingSMTP(FakeSMTP):
@@ -65,7 +88,7 @@ class RefusingSMTP(FakeSMTP):
 
 @pytest.fixture(autouse=True)
 def _fake_smtp(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", FakeSMTP)
 
 
 # ── the check ─────────────────────────────────────────────────────────────────────────────────
@@ -155,23 +178,28 @@ async def _smtp_sent_ics(monkeypatch):
 
 
 async def _smtp_failed_plain(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_plain_email(CONFIG, [SENTINEL], "S", "body"))["sent"]
 
 
 async def _smtp_failed_html(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_html_email(CONFIG, [SENTINEL], "S", "body", "<p>body</p>"))["sent"]
 
 
 async def _smtp_failed_ics(monkeypatch):
-    monkeypatch.setattr(smtp.smtplib, "SMTP", RefusingSMTP)
+    monkeypatch.setattr(smtp, "_SMTP", RefusingSMTP)
     assert not (await send_email_with_ics(CONFIG, [SENTINEL], "S", "body", ICS))["sent"]
 
 
 async def _smtp_tls_unverified(monkeypatch):
     cfg = dict(CONFIG, tls_verify=False)
     assert (await send_plain_email(cfg, [SENTINEL], "S", "body"))["sent"]
+
+
+async def _smtp_ipv4_connect_failed(monkeypatch):
+    monkeypatch.setattr(smtp, "_SMTP", _IPv4BrokenSMTP)
+    assert (await send_plain_email(CONFIG, [SENTINEL], "S", "body"))["sent"]
 
 
 # (driver, the line it must produce: logger, function, event)
@@ -194,6 +222,8 @@ DRIVERS: dict[str, tuple[Callable[..., Awaitable[None]], tuple[str, str, str]]] 
     "smtp_failed_ics": (_smtp_failed_ics, ("cogno_herald.smtp", "send_email_with_ics", "send_failed")),
     "smtp_tls_unverified": (_smtp_tls_unverified,
                             ("cogno_herald.smtp", "_tls_context", "tls_verification_disabled")),
+    "smtp_ipv4_connect_failed": (_smtp_ipv4_connect_failed,
+                                 ("cogno_herald.smtp", "_open", "smtp_ipv4_connect_failed")),
 }
 
 

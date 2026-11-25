@@ -198,10 +198,39 @@ def _tls_context(smtp_config: SmtpConfig) -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
+#: IPv4 first with a short connect+greeting cap, then the default path (IPv6/any) — smtplib
+#: connects sequentially, family by family, with no happy eyeballs.
+_CONNECT_IPV4_S = 3.0
+_CONNECT_FALLBACK_S = 8.0
+_SESSION_TIMEOUT_S = 30.0
+
+
+def _open(host: str, port: int) -> smtplib.SMTP:
+    """Open the SMTP connection, trying IPv4 first.
+
+    ``smtplib`` connects family by family in ``getaddrinfo`` order (IPv6 first), in series, with no
+    happy eyeballs, so a broken IPv6 route costs the whole timeout before the IPv4 attempt. Bind
+    the source to the IPv4 wildcard (``0.0.0.0``) under a short cap to try IPv4 first; on any
+    connect or greeting failure — nothing of the message has gone out yet — fall back to the
+    default path (IPv6/any) under a longer cap.
+
+    Only the connection (and the server's greeting) is retried. A failure AFTER it — STARTTLS,
+    login, the send — is never retried here: the message could then go out twice. ``SMTPException``
+    is an ``OSError`` (since 3.4), and only the constructor is inside the ``try``.
+    """
+    try:
+        server = smtplib.SMTP(host, port, timeout=_CONNECT_IPV4_S, source_address=("0.0.0.0", 0))
+    except OSError as exc:   # connect or greeting failed — nothing of the message was sent
+        logger.info("stage=email event=smtp_ipv4_connect_failed error=%s", type(exc).__name__)
+        server = smtplib.SMTP(host, port, timeout=_CONNECT_FALLBACK_S)
+    server.sock.settimeout(_SESSION_TIMEOUT_S)   # the session (STARTTLS, login, DATA) keeps 30 s
+    return server
+
+
 def _connect(smtp_config: SmtpConfig) -> smtplib.SMTP:
     host = smtp_config["host"]
     port = smtp_config.get("port", 587)
-    server = smtplib.SMTP(host, port, timeout=30)
+    server = _open(host, port)
     server.ehlo()
     if smtp_config.get("use_tls", True):
         server.starttls(context=_tls_context(smtp_config))

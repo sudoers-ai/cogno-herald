@@ -4,6 +4,29 @@
 
 Publishes every «Unreleased» entry below, merged since 0.1.0. No change of its own.
 
+## 0.1.3 — 2026-11-25
+
+- **The SMTP sender tries IPv4 first, then falls back to the default path.** `smtplib` connects
+  family by family in `getaddrinfo` order (IPv6 first), in series, with no happy eyeballs, so a
+  host whose IPv6 route to the relay is broken waited the full connect timeout before trying
+  IPv4. Inside a caller that caps the whole send (e.g. a 30 s tool budget), that one connect could
+  exhaust the budget and drop the send.
+  - `_connect` now opens the socket through `_open(host, port)`: a first attempt bound to the
+    IPv4 wildcard (`source_address=("0.0.0.0", 0)`) under a short 3 s cap, so IPv4 is tried first;
+    on any connect-or-greeting failure — nothing of the message has gone out yet — a second
+    attempt on the default path (IPv6/any) under an 8 s cap. The socket is then widened back to
+    the 30 s session timeout, so STARTTLS, login and DATA are unchanged.
+  - Only the connection (and the server's greeting) is retried. A failure AFTER it — STARTTLS,
+    login, the send — is never retried: the message could then go out twice. `SMTPException` is an
+    `OSError` (since 3.4), and only the constructor is inside the `try`.
+  - Logs `event=smtp_ipv4_connect_failed` (INFO) with the exception's CLASS only when the IPv4
+    attempt falls back — never the host, never a user.
+  - `tests/unit/test_smtp_ipv4_first.py` pins it with a recording fake `smtplib.SMTP`: IPv4 ok →
+    one constructor with the source address and the socket widened to 30 s; an `OSError` /
+    `socket.timeout` / `SMTPServerDisconnected` on IPv4 → a second constructor with no source
+    address; both fail → the second exception propagates clean; a login error after connect → no
+    second constructor; the fallback log carries no host.
+
 ## 0.1.2 — 2026-11-11
 
 - **The `.ics` builders are hardened against calendar injection (RFC 5545).**

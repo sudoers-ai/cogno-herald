@@ -23,10 +23,15 @@ HTML = ("<!DOCTYPE html><html><body><table><tr><td>01/11</td><td>Álgebra</td></
         "</table></body></html>")
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
     sent: list = []
 
-    def __init__(self, host, port, timeout=30):
+    def __init__(self, host, port, timeout=30, source_address=None):
+        self.sock = _FakeSock()
         FakeSMTP.sent = []
 
     def ehlo(self): ...

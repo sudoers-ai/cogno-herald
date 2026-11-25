@@ -33,12 +33,17 @@ CONFIG = {"host": "smtp.test", "port": 587, "user": "u", "password": "p",
           "from_email": "from@test", "from_name": "Cogno", "use_tls": True}
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
     sent: list = []
     tls_context = None
 
-    def __init__(self, host, port, timeout=30):
+    def __init__(self, host, port, timeout=30, source_address=None):
         self.host = host
+        self.sock = _FakeSock()
         FakeSMTP.sent = []
         FakeSMTP.tls_context = None
 

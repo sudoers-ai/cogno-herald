@@ -43,6 +43,9 @@ line fails until a sentinel case drives it.
   exception's class name (`error=SMTPRecipientsRefused`), from all three senders.
   WARNING `event=tls_verification_disabled` (with the SMTP `host`, the operator's own
   configuration) on every STARTTLS send with `tls_verify` false and no `tls_ca_file`.
+  INFO `event=smtp_ipv4_connect_failed` when the IPv4-first connect fails and the send falls
+  back to the default path (IPv6/any): it carries the exception's CLASS only (`error=OSError`),
+  never the host and never a user.
 - `cogno_herald.otp` — INFO `event=sent|checked|verified|verify_failed` (`checked` is a
   correct code under `verify(consume=False)`); WARNING
   `event=no_sender|send_failed|burned|mock_bypass`; WARNING `event=insecure_store` once per

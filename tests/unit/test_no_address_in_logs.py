@@ -46,13 +46,28 @@ LOGGERS = ("cogno_herald.otp", "cogno_herald.smtp")
 _EVENT = re.compile(r"event=(\w+)")
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
-    def __init__(self, host, port, timeout=30): ...
+    def __init__(self, host, port, timeout=30, source_address=None):
+        self.sock = _FakeSock()
     def ehlo(self): ...
     def starttls(self, context=None): ...
     def login(self, user, password): ...
     def sendmail(self, from_email, recipients, payload): ...
     def quit(self): ...
+
+
+class _IPv4BrokenSMTP(FakeSMTP):
+    """The IPv4-first constructor fails (a broken route); the fallback one connects. The failure
+    path logs ``event=smtp_ipv4_connect_failed`` — and it must carry no address."""
+
+    def __init__(self, host, port, timeout=30, source_address=None):
+        if source_address is not None:
+            raise OSError("network unreachable")
+        super().__init__(host, port, timeout=timeout)
 
 
 class RefusingSMTP(FakeSMTP):
@@ -174,6 +189,11 @@ async def _smtp_tls_unverified(monkeypatch):
     assert (await send_plain_email(cfg, [SENTINEL], "S", "body"))["sent"]
 
 
+async def _smtp_ipv4_connect_failed(monkeypatch):
+    monkeypatch.setattr(smtp.smtplib, "SMTP", _IPv4BrokenSMTP)
+    assert (await send_plain_email(CONFIG, [SENTINEL], "S", "body"))["sent"]
+
+
 # (driver, the line it must produce: logger, function, event)
 DRIVERS: dict[str, tuple[Callable[..., Awaitable[None]], tuple[str, str, str]]] = {
     "otp_insecure_store": (_otp_insecure_store, ("cogno_herald.otp", "__init__", "insecure_store")),
@@ -194,6 +214,8 @@ DRIVERS: dict[str, tuple[Callable[..., Awaitable[None]], tuple[str, str, str]]] 
     "smtp_failed_ics": (_smtp_failed_ics, ("cogno_herald.smtp", "send_email_with_ics", "send_failed")),
     "smtp_tls_unverified": (_smtp_tls_unverified,
                             ("cogno_herald.smtp", "_tls_context", "tls_verification_disabled")),
+    "smtp_ipv4_connect_failed": (_smtp_ipv4_connect_failed,
+                                 ("cogno_herald.smtp", "_open", "smtp_ipv4_connect_failed")),
 }
 
 

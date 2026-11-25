@@ -40,10 +40,15 @@ ICS = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:
 STRICT_LIMIT = 1001
 
 
+class _FakeSock:
+    def settimeout(self, timeout): ...
+
+
 class FakeSMTP:
     sent: list = []
 
-    def __init__(self, host, port, timeout=30):
+    def __init__(self, host, port, timeout=30, source_address=None):
+        self.sock = _FakeSock()
         FakeSMTP.sent = []
 
     def ehlo(self): ...
